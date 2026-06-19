@@ -56,6 +56,9 @@ export function ImageUpload({
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // The value can arrive undefined (e.g. branding with no logo set), so never
+  // call string methods on the raw prop.
+  const v = value ?? '';
 
   const pick = async (file: File | undefined) => {
     if (!file) return;
@@ -89,8 +92,8 @@ export function ImageUpload({
         {label}
       </span>
       <div className="flex items-center gap-3">
-        {value ? (
-          <img src={value} alt="" className={`${preview} ring-1 ring-hair-soft`} />
+        {v ? (
+          <img src={v} alt="" className={`${preview} ring-1 ring-hair-soft`} />
         ) : (
           <div
             className={`flex items-center justify-center text-faint ring-1 ring-hair-soft ${preview}`}
@@ -113,9 +116,9 @@ export function ImageUpload({
               onClick={() => inputRef.current?.click()}
               disabled={busy}
             >
-              <Upload size={15} /> {busy ? 'Processing…' : value ? 'Replace' : 'Upload'}
+              <Upload size={15} /> {busy ? 'Processing…' : v ? 'Replace' : 'Upload'}
             </Button>
-            {value && (
+            {v && (
               <Button type="button" variant="ghost" onClick={() => onChange('')}>
                 <X size={15} /> Remove
               </Button>
@@ -125,7 +128,7 @@ export function ImageUpload({
       </div>
       <input
         className={`${inputClass} mt-2`}
-        value={value.startsWith('data:') ? '' : value}
+        value={v.startsWith('data:') ? '' : v}
         placeholder="…or paste an image URL"
         onChange={(e) => onChange(e.target.value)}
       />
