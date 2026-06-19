@@ -128,7 +128,7 @@ export function EventTypesTab() {
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-ink">{t.name}</span>
                 {!t.active && (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-muted">
+                  <span className="rounded bg-overlay px-1.5 py-0.5 text-xs text-muted">
                     inactive
                   </span>
                 )}
@@ -141,7 +141,7 @@ export function EventTypesTab() {
               href={`/?type=${encodeURIComponent(t.slug)}`}
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg p-2 text-faint hover:bg-white/5 hover:text-muted"
+              className="rounded-lg p-2 text-faint hover:bg-overlay hover:text-muted"
               aria-label="Preview"
             >
               <ExternalLink size={16} />

@@ -12,8 +12,15 @@ export function appBaseUrl(): string {
   return isEmulator() ? 'http://localhost:5000' : '';
 }
 
-export function manageUrl(bookingId: string, token: string): string {
+export function manageUrl(tenantId: string, bookingId: string, token: string): string {
   const base = appBaseUrl();
-  const path = `/manage?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(token)}`;
+  const path = `/${encodeURIComponent(tenantId)}/manage?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(token)}`;
+  return base ? `${base}${path}` : path;
+}
+
+/** The tenant's admin URL (path-based: /{slug}/admin). */
+export function adminUrl(tenantId: string): string {
+  const base = appBaseUrl();
+  const path = `/${encodeURIComponent(tenantId)}/admin`;
   return base ? `${base}${path}` : path;
 }

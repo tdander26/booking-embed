@@ -18,6 +18,14 @@
     },
     {
       "collectionGroup": "bookings",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "reminderDueUtc", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "bookings",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "eventTypeId", "order": "ASCENDING" },

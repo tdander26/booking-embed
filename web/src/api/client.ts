@@ -1,3 +1,4 @@
+import { DEFAULT_TENANT } from '../lib/tenant';
 import type {
   PublicBranding,
   PublicEventType,
@@ -13,6 +14,17 @@ import type {
   AdminMe,
   AnswerValue,
 } from './types';
+
+/** The active tenant for this page load. Set once at boot from the URL path
+ * (see main.tsx). All public calls hit /api/t/{tenant}/…, all admin calls hit
+ * /api/admin/t/{tenant}/…. */
+let currentTenant = DEFAULT_TENANT;
+export function setTenant(slug: string): void {
+  currentTenant = slug || DEFAULT_TENANT;
+}
+export function getTenant(): string {
+  return currentTenant;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -36,7 +48,13 @@ async function request<T>(
     const token = await idToken();
     if (token) headers['Authorization'] = `Bearer ${token}`;
   }
-  const res = await fetch(`/api${path}`, { ...opts, headers });
+  // Tenant-scope the path. Admin paths ('/admin/…') become
+  // '/api/admin/t/{tenant}/…'; public paths become '/api/t/{tenant}/…'.
+  const tenant = encodeURIComponent(currentTenant);
+  const full = opts.admin
+    ? `/api/admin/t/${tenant}${path.replace(/^\/admin/, '')}`
+    : `/api/t/${tenant}${path}`;
+  const res = await fetch(full, { ...opts, headers });
   const text = await res.text();
   const data = text ? safeParse(text) : null;
   if (!res.ok) {
@@ -233,3 +251,32 @@ export const adminSaveBranding = (body: Partial<PublicBranding>) =>
     method: 'PUT',
     body: JSON.stringify(body),
   });
+
+// ---- Onboarding (no tenant prefix; needs a verified Google token) ----
+export async function signup(body: {
+  practiceName: string;
+  desiredSlug: string;
+  accessCode: string;
+  timezone?: string;
+}): Promise<{ tenantSlug: string; adminUrl: string }> {
+  const token = await idToken();
+  const res = await fetch('/api/signup', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const data = text ? safeParse(text) : null;
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      data?.error ?? 'error',
+      data?.message ?? `Request failed (${res.status})`,
+      data?.fields ?? data?.details,
+    );
+  }
+  return data as { tenantSlug: string; adminUrl: string };
+}

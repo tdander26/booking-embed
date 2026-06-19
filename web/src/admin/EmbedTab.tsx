@@ -18,7 +18,7 @@ const KIND_HINT: Record<SnippetKind, string> = {
   popup: 'Turn any link into a booking modal trigger.',
 };
 
-export function EmbedTab() {
+export function EmbedTab({ tenantSlug }: { tenantSlug: string }) {
   const [types, setTypes] = useState<EventType[] | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -57,8 +57,9 @@ export function EmbedTab() {
     const q = new URLSearchParams();
     if (slug) q.set('type', slug);
     if (showProvider && providerId) q.set('provider', providerId);
-    return `${origin}/?${q.toString()}`;
-  }, [origin, slug, providerId, showProvider]);
+    // Path-based tenant routing: /{tenantSlug}/?type=…
+    return `${origin}/${tenantSlug}/?${q.toString()}`;
+  }, [origin, tenantSlug, slug, providerId, showProvider]);
 
   const embedSrc = `${origin}/embed.js`;
   // Live preview loads the real booking page in embed (transparent) mode.
@@ -222,9 +223,9 @@ function PreviewCard({ kind, url }: { kind: SnippetKind; url: string }) {
       {kind === 'floating' && (
         <div className="relative h-72 overflow-hidden rounded-xl border border-hair-soft bg-surface-2">
           <div className="space-y-2 p-5">
-            <div className="h-3 w-2/3 rounded bg-white/5" />
-            <div className="h-3 w-1/2 rounded bg-white/5" />
-            <div className="h-3 w-3/4 rounded bg-white/5" />
+            <div className="h-3 w-2/3 rounded bg-overlay" />
+            <div className="h-3 w-1/2 rounded bg-overlay" />
+            <div className="h-3 w-3/4 rounded bg-overlay" />
             <div className="text-xs text-faint">…your page content…</div>
           </div>
           <button
@@ -298,7 +299,7 @@ function SnippetCard({ kind, code }: { kind: SnippetKind; code: string }) {
         </div>
         <button
           onClick={copy}
-          className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-hair px-3 text-sm font-medium text-ink transition hover:border-brand/60 hover:bg-white/[0.03]"
+          className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-hair px-3 text-sm font-medium text-ink transition hover:border-brand/60 hover:bg-overlay-soft"
         >
           {copied ? <Check size={15} className="text-brand" /> : <Copy size={15} />}
           {copied ? 'Copied' : 'Copy'}

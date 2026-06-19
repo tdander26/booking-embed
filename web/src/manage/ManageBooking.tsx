@@ -3,6 +3,7 @@ import { Check, X, Calendar } from 'lucide-react';
 import * as api from '../api/client';
 import type { ManageView } from '../api/types';
 import { fmtFull } from '../lib/time';
+import { applyBrand, applyTheme } from '../lib/brand';
 import { Spinner, Banner, Button, Card } from '../components/ui';
 
 export function ManageBooking() {
@@ -25,6 +26,17 @@ export function ManageBooking() {
       .then(setView)
       .catch((e) => setErr((e as Error).message));
   }, [id, token]);
+
+  // Match the clinic's theme + accent on this page too.
+  useEffect(() => {
+    api
+      .getBranding()
+      .then((b) => {
+        applyTheme(b.theme);
+        applyBrand(b.brandColor);
+      })
+      .catch(() => undefined);
+  }, []);
 
   const doCancel = async () => {
     setWorking(true);
@@ -58,7 +70,7 @@ export function ManageBooking() {
             </div>
 
             {view.status === 'cancelled' ? (
-              <div className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-sm text-muted">
+              <div className="mt-4 inline-flex items-center gap-2 rounded-lg bg-overlay px-3 py-2 text-sm text-muted">
                 <X size={16} /> This appointment was cancelled.
               </div>
             ) : confirmCancel ? (

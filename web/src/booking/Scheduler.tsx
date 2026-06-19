@@ -126,7 +126,7 @@ export function Scheduler({
       <div>
         <SchedulerHeader eventType={eventType} provider={provider} />
         <div className="mt-4 flex flex-col items-center gap-4 rounded-xl border border-hair-soft bg-surface-2 p-8 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.04] text-faint">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-overlay-soft text-faint">
             <CalendarX size={22} />
           </div>
           <div>
@@ -169,7 +169,7 @@ export function Scheduler({
               aria-label="Previous month"
               disabled={!canPrev}
               onClick={() => setMonthAnchor((m) => m.minus({ months: 1 }))}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition hover:bg-white/5 hover:text-brand disabled:opacity-25 disabled:hover:bg-transparent"
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition hover:bg-overlay hover:text-brand disabled:opacity-25 disabled:hover:bg-transparent"
             >
               <ChevronLeft size={18} />
             </button>
@@ -180,7 +180,7 @@ export function Scheduler({
               aria-label="Next month"
               disabled={!canNext}
               onClick={() => setMonthAnchor((m) => m.plus({ months: 1 }))}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition hover:bg-white/5 hover:text-brand disabled:opacity-25 disabled:hover:bg-transparent"
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition hover:bg-overlay hover:text-brand disabled:opacity-25 disabled:hover:bg-transparent"
             >
               <ChevronRight size={18} />
             </button>
@@ -214,7 +214,7 @@ export function Scheduler({
                       'relative flex aspect-square items-center justify-center rounded-lg text-sm transition-all duration-150',
                       !inMonth ? 'text-faint/40' : '',
                       selectable
-                        ? 'font-semibold text-ink hover:bg-white/[0.06] hover:ring-1 hover:ring-brand/40'
+                        ? 'font-semibold text-ink hover:bg-overlay hover:ring-1 hover:ring-brand/40'
                         : 'text-faint/50',
                       isSelected
                         ? '!text-brand-fg shadow-gold-glow [background:linear-gradient(135deg,var(--brand-light),var(--brand-dark))]'

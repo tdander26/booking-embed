@@ -1,6 +1,8 @@
 import { Router, type Request } from 'express';
 import { DateTime } from 'luxon';
 import { z } from 'zod';
+import { DEFAULT_TENANT, tenantDb } from '../firebase';
+import { tenantActive } from '../tenants';
 import { loadBranding } from '../branding';
 import {
   loadEventTypeById,
@@ -31,6 +33,21 @@ export const publicRouter = Router();
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Tenant for this request: the `:tenantId` path param, or the default tenant
+ * for legacy slug-less routes (keeps live embeds working). */
+function tid(req: Request): string {
+  const p = req.params.tenantId;
+  return typeof p === 'string' && p ? p : DEFAULT_TENANT;
+}
+
+/** Resolve + assert the tenant is active; throws notFound otherwise. */
+async function requireTenant(req: Request): Promise<string> {
+  const id = tid(req);
+  const t = await tenantActive(id);
+  if (!t) throw notFound('Practice not found', 'no_tenant');
+  return id;
+}
+
 function validTz(tz: unknown): string | null {
   if (typeof tz !== 'string' || !tz) return null;
   return DateTime.now().setZone(tz).isValid ? tz : null;
@@ -41,6 +58,11 @@ function clientIp(req: Request): string {
   // read the raw X-Forwarded-For leftmost value — it is client-spoofable and
   // would let an attacker mint unlimited distinct rate-limit buckets.
   return req.ip || 'unknown';
+}
+
+/** Register a handler on BOTH the legacy slug-less path and the tenant path. */
+function dual(path: string): string[] {
+  return [`/api/${path}`, `/api/t/:tenantId/${path}`];
 }
 
 /**
@@ -76,8 +98,8 @@ function toPublic(e: EventType, memberMap: Map<string, Member>): PublicEventType
 }
 
 /** Load active members keyed by id, for provider hydration. */
-async function activeMemberMap(): Promise<Map<string, Member>> {
-  const members = await listActiveMembers();
+async function activeMemberMap(tenantId: string): Promise<Map<string, Member>> {
+  const members = await listActiveMembers(tenantId);
   return new Map(members.map((m) => [m.id, m]));
 }
 
@@ -89,23 +111,27 @@ function publicBranding(b: Branding) {
     brandColor: b.brandColor,
     welcomeText: b.welcomeText ?? '',
     timezone: b.timezone,
+    theme: b.theme ?? 'dark',
+    // Public Google Ads conversion config (fired client-side on confirmation).
+    adsConversionId: (b as { adsConversionId?: string }).adsConversionId ?? '',
+    adsConversionLabel: (b as { adsConversionLabel?: string }).adsConversionLabel ?? '',
   };
 }
 
 publicRouter.get(
-  '/api/branding',
-  wrap(async (_req, res) => {
-    res.json(publicBranding(await loadBranding()));
+  dual('branding'),
+  wrap(async (req, res) => {
+    res.json(publicBranding(await loadBranding(tid(req))));
   }),
 );
 
 publicRouter.get(
-  '/api/event-types',
-  wrap(async (_req, res) => {
-    const { db, COL } = await import('../firebase');
+  dual('event-types'),
+  wrap(async (req, res) => {
+    const tenantId = await requireTenant(req);
     const [q, memberMap] = await Promise.all([
-      db.collection(COL.eventTypes).where('active', '==', true).get(),
-      activeMemberMap(),
+      tenantDb(tenantId).eventTypes().where('active', '==', true).get(),
+      activeMemberMap(tenantId),
     ]);
     const types = q.docs
       .map((d) => ({ id: d.id, ...d.data() }) as EventType)
@@ -116,11 +142,12 @@ publicRouter.get(
 );
 
 publicRouter.get(
-  '/api/event-types/:slug',
+  dual('event-types/:slug'),
   wrap(async (req, res) => {
+    const tenantId = await requireTenant(req);
     const [e, memberMap] = await Promise.all([
-      loadEventTypeBySlug(req.params.slug),
-      activeMemberMap(),
+      loadEventTypeBySlug(tenantId, req.params.slug),
+      activeMemberMap(tenantId),
     ]);
     if (!e || !e.active) throw notFound('Event type not found', 'no_event_type');
     res.json(toPublic(e, memberMap));
@@ -146,20 +173,21 @@ function resolveMemberId(e: EventType, raw: unknown): string | undefined {
 }
 
 publicRouter.get(
-  '/api/availability',
+  dual('availability'),
   wrap(async (req, res) => {
+    const tenantId = await requireTenant(req);
     const id = typeof req.query.eventTypeId === 'string' ? req.query.eventTypeId : undefined;
     const slug = typeof req.query.slug === 'string' ? req.query.slug : undefined;
     const e = id
-      ? await loadEventTypeById(id)
+      ? await loadEventTypeById(tenantId, id)
       : slug
-        ? await loadEventTypeBySlug(slug)
+        ? await loadEventTypeBySlug(tenantId, slug)
         : null;
     if (!e || !e.active) throw notFound('Event type not found', 'no_event_type');
 
     const memberId = resolveMemberId(e, req.query.memberId);
 
-    const branding = await loadBranding();
+    const branding = await loadBranding(tenantId);
     const tz = validTz(req.query.tz) ?? branding.timezone ?? 'UTC';
     const today = DateTime.now().setZone(tz).toFormat('yyyy-MM-dd');
     const from =
@@ -172,6 +200,7 @@ publicRouter.get(
         : DateTime.fromISO(from).plus({ days: 42 }).toFormat('yyyy-MM-dd');
 
     const result = await computeAvailability({
+      tenantId,
       eventType: e,
       memberId,
       fromDate: from,
@@ -189,17 +218,18 @@ const NEXT_AVAIL_MAX_MEMBERS = 8;
 const nextAvailCache = new Map<string, { at: number; value: NextAvailableResponse }>();
 
 publicRouter.get(
-  '/api/next-available',
+  dual('next-available'),
   wrap(async (req, res) => {
     if (!rateLimit(`nextavail:${clientIp(req)}`, 30, 60_000)) {
       throw forbidden('Too many requests. Please wait a moment.', 'rate_limited');
     }
+    const tenantId = await requireTenant(req);
     const eventTypeId = typeof req.query.eventTypeId === 'string' ? req.query.eventTypeId : '';
     if (!eventTypeId) throw badRequest('Missing event type.', 'invalid_body');
-    const e = await loadEventTypeById(eventTypeId);
+    const e = await loadEventTypeById(tenantId, eventTypeId);
     if (!e || !e.active) throw notFound('Event type not found', 'no_event_type');
 
-    const branding = await loadBranding();
+    const branding = await loadBranding(tenantId);
     const tz = validTz(req.query.tz) ?? branding.timezone ?? 'UTC';
 
     // Requested members default to the type's full provider list; validate each
@@ -218,10 +248,10 @@ publicRouter.get(
       return;
     }
 
-    // 60s in-memory cache keyed on type, sorted members, tz, and the local day
-    // (so it rolls over at midnight in the invitee's zone).
+    // 60s in-memory cache keyed on tenant, type, sorted members, tz, and the
+    // local day (so it rolls over at midnight in the invitee's zone).
     const todayInTz = DateTime.now().setZone(tz).toFormat('yyyy-MM-dd');
-    const cacheKey = `${e.id}|${[...memberIds].sort().join(',')}|${tz}|${todayInTz}`;
+    const cacheKey = `${tenantId}|${e.id}|${[...memberIds].sort().join(',')}|${tz}|${todayInTz}`;
     const cached = nextAvailCache.get(cacheKey);
     if (cached && Date.now() - cached.at < NEXT_AVAIL_TTL_MS) {
       res.json(cached.value);
@@ -232,7 +262,7 @@ publicRouter.get(
     // error never dead-ends the whole response.
     const providers: NextAvailableProvider[] = await Promise.all(
       memberIds.map((memberId) =>
-        nextAvailableForMember(e, memberId, tz).catch(
+        nextAvailableForMember(tenantId, e, memberId, tz).catch(
           () =>
             ({
               memberId,
@@ -286,11 +316,12 @@ const bookingSchema = z
   );
 
 publicRouter.post(
-  '/api/bookings',
+  dual('bookings'),
   wrap(async (req, res) => {
     if (!rateLimit(`book:${clientIp(req)}`, 10, 60_000)) {
       throw forbidden('Too many requests. Please wait a moment.', 'rate_limited');
     }
+    const tenantId = await requireTenant(req);
     const parsed = bookingSchema.safeParse(req.body);
     if (!parsed.success) {
       throw badRequest('Please check the booking details and try again.', 'invalid_body');
@@ -299,7 +330,7 @@ publicRouter.post(
     if (!tz) throw badRequest('Invalid timezone.', 'bad_timezone');
     // Deep answer validation against the event type's questions happens inside
     // createBooking (server is authoritative); the zod above is a coarse guard.
-    const { confirmation } = await createBooking({ ...parsed.data, timezone: tz });
+    const { confirmation } = await createBooking(tenantId, { ...parsed.data, timezone: tz });
     res.status(201).json(confirmation);
   }),
 );
@@ -319,10 +350,10 @@ function manageView(b: Booking) {
 }
 
 publicRouter.get(
-  '/api/bookings/:id',
+  dual('bookings/:id'),
   wrap(async (req, res) => {
     const token = typeof req.query.t === 'string' ? req.query.t : '';
-    const booking = await loadBookingForManage(req.params.id, token);
+    const booking = await loadBookingForManage(tid(req), req.params.id, token);
     res.json(manageView(booking));
   }),
 );
@@ -333,14 +364,14 @@ const cancelSchema = z.object({
 });
 
 publicRouter.post(
-  '/api/bookings/:id/cancel',
+  dual('bookings/:id/cancel'),
   wrap(async (req, res) => {
     if (!rateLimit(`cancel:${clientIp(req)}`, 20, 60_000)) {
       throw forbidden('Too many requests.', 'rate_limited');
     }
     const parsed = cancelSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid request.', 'invalid_body');
-    const booking = await cancelBooking(req.params.id, parsed.data.token, parsed.data.reason);
+    const booking = await cancelBooking(tid(req), req.params.id, parsed.data.token, parsed.data.reason);
     res.json(manageView(booking));
   }),
 );

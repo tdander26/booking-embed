@@ -1,70 +1,36 @@
 rules_version = '2';
 
-// Booking-embed Firestore security model.
+// Booking-embed Firestore security model (multi-tenant).
 //
-// Principle: the PUBLIC booking flow never writes Firestore directly and never
-// reads anything sensitive. All mutations (bookings, slot locks) go through the
-// `api` Cloud Function using the Admin SDK, which bypasses these rules. The
-// admin UI authenticates as the owner (custom claim `admin == true`) and reads
-// /writes config directly.
+// Principle: ALL data access — public booking flow AND admin — is mediated by
+// the `api` Cloud Function using the Admin SDK, which BYPASSES these rules. The
+// web client touches Firestore only for Google sign-in (Firebase Auth), never to
+// read or write tenant data. So the correct, strictly-safe posture is to DENY
+// every direct client read/write. This makes cross-tenant leakage impossible at
+// the rules layer regardless of any future client-config exposure; per-tenant
+// authorization is enforced in the API (requireAdmin resolves the caller's role
+// within the path's tenant).
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isAdmin() {
-      return request.auth != null && request.auth.token.admin == true;
-    }
-
-    // Public, non-sensitive branding (clinic name, colors, avatar, welcome text).
-    match /branding/{doc} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Event types: anyone can read ACTIVE ones (the booking page needs them).
-    // Inactive/draft types and all writes are admin-only.
-    match /eventTypes/{id} {
-      allow read: if resource.data.active == true || isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Providers ("members"). The app reads these only through the auth-gated /api
-    // (which strips email), so direct client reads are admin-only. Writes admin.
-    match /members/{memberId} {
-      allow read, write: if isAdmin();
-
-      // Per-account Google connections hold refresh tokens — server-only, no
-      // client access of any kind (the Admin SDK in the api function bypasses).
-      match /connections/{connId} {
-        allow read, write: if false;
-      }
-    }
-
-    // Availability schedules are consumed server-side by getAvailability (Admin
-    // SDK). The client only needs them in the admin editor.
-    match /availabilitySchedules/{id} {
-      allow read, write: if isAdmin();
-    }
-
-    // Bookings contain invitee PII (name, email, phone, notes).
-    // Never client-readable except by the owner; never client-writable
-    // (creation/cancellation flow through the api function).
-    match /bookings/{id} {
-      allow read: if isAdmin();
-      allow write: if false;
-    }
-
-    // Atomic slot reservation locks — server-only.
-    match /slotLocks/{id} {
+    // Per-tenant data: the tenant doc (branding folded in) + every subcollection
+    // (members, members/*/connections, eventTypes, availabilitySchedules,
+    // bookings, slotLocks, dayCounters, reminderSends). Server-only.
+    match /tenants/{tenantId}/{document=**} {
       allow read, write: if false;
     }
 
-    // Owner secrets (Google OAuth refresh token, etc.) — server-only, no client
-    // access of any kind.
-    match /private/{doc} {
+    // Platform-level: hashed signup access codes + short-lived OAuth state.
+    match /signupCodes/{doc} {
+      allow read, write: if false;
+    }
+    match /oauthStates/{doc} {
       allow read, write: if false;
     }
 
-    // Deny everything else by default.
+    // Deny everything else, including the legacy root collections that the
+    // migration leaves intact for rollback (branding, members, eventTypes,
+    // availabilitySchedules, bookings, slotLocks, dayCounters, private/*).
     match /{document=**} {
       allow read, write: if false;
     }

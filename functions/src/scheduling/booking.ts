@@ -1,13 +1,14 @@
 import { DateTime } from 'luxon';
 import { logger } from 'firebase-functions';
 import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
-import { db, COL } from '../firebase';
+import { db, tenantDb } from '../firebase';
 import { BASE_GRID_MINUTES, isEmulator } from '../config';
 import { coveredCells } from './slots';
 import { computeAvailability, loadEventTypeById, loadSchedule } from './availability';
 import { getMemberCalendar, getConnectionProvider } from '../calendar/provider';
 import { MockCalendarProvider, type CalendarProvider } from '../calendar/provider';
 import { loadMember } from '../members';
+import { ownerMemberId } from '../tenants';
 import { validateAnswers, formatAnswersText } from './answers';
 import { randomToken, sanitizeForDocId } from '../util/ids';
 import { badRequest, conflict, notFound, serverError } from '../util/http';
@@ -25,11 +26,11 @@ import type {
   Member,
 } from '../types';
 
-const DEFAULT_MEMBER_ID = 'mbr_todd'; // legacy single-provider fallback
-
 /** Locks/counters are partitioned by MEMBER (the true concurrency domain), not
  * by calendar id: two providers can hold the same wall-clock cell, while two
- * bookings for the SAME member that overlap still collide on a shared cell. */
+ * bookings for the SAME member that overlap still collide on a shared cell. The
+ * docs live UNDER the tenant (tenantDb), so the same member-id string in two
+ * tenants can never collide. */
 function lockId(memberId: string, cell: number): string {
   return `${sanitizeForDocId(memberId)}_${cell}`;
 }
@@ -43,11 +44,10 @@ function canonicalIso(input: string): { ms: number; iso: string } {
 /**
  * Resolve the provider this booking is for. When the event type lists members,
  * `req.memberId` is required and must be one of them; otherwise we fall back to
- * the owner (`mbr_todd`) so legacy single-provider types keep working.
- * Returns the resolved id plus the loaded member doc (may be null in legacy mode
- * when the members collection hasn't been seeded yet).
+ * the tenant owner so legacy single-provider types keep working.
  */
 async function resolveMember(
+  tenantId: string,
   eventType: EventType,
   req: CreateBookingRequest,
 ): Promise<{ memberId: string; member: Member | null }> {
@@ -57,15 +57,15 @@ async function resolveMember(
     if (!chosen || !offered.includes(chosen)) {
       throw badRequest('Please choose a provider.', 'member_required');
     }
-    const member = await loadMember(chosen);
+    const member = await loadMember(tenantId, chosen);
     if (!member || !member.active) {
       throw notFound('Provider unavailable', 'no_member');
     }
     return { memberId: chosen, member };
   }
   // Legacy single-provider: honor an explicit memberId if given, else the owner.
-  const memberId = req.memberId || DEFAULT_MEMBER_ID;
-  const member = await loadMember(memberId);
+  const memberId = req.memberId || (await ownerMemberId(tenantId));
+  const member = await loadMember(tenantId, memberId);
   return { memberId, member };
 }
 
@@ -84,16 +84,17 @@ function buildReminderSchedule(
 }
 
 export async function createBooking(
+  tenantId: string,
   req: CreateBookingRequest,
   nowMs = Date.now(),
 ): Promise<{ booking: Booking; confirmation: BookingConfirmation }> {
-  const eventType = await loadEventTypeById(req.eventTypeId);
+  const eventType = await loadEventTypeById(tenantId, req.eventTypeId);
   if (!eventType || !eventType.active) {
     throw notFound('Event type not found', 'no_event_type');
   }
 
   // Resolve the provider (or legacy owner). Member-aware from here on.
-  const { memberId, member } = await resolveMember(eventType, req);
+  const { memberId, member } = await resolveMember(tenantId, eventType, req);
   const memberName = member?.name;
 
   // Validate custom intake answers against the CURRENT questions BEFORE the
@@ -109,6 +110,7 @@ export async function createBooking(
   // calendar busy, and existing bookings). The client's view may be stale.
   const start = DateTime.fromMillis(startMs, { zone: 'utc' });
   const avail = await computeAvailability({
+    tenantId,
     eventType,
     memberId,
     fromDate: start.minus({ days: 1 }).toFormat('yyyy-MM-dd'),
@@ -123,7 +125,7 @@ export async function createBooking(
 
   // Per-member write target: a real Google calendar when this member has a write
   // connection, otherwise the mock provider (same as today's not-connected path).
-  const rc = await getMemberCalendar(memberId);
+  const rc = await getMemberCalendar(tenantId, memberId);
   const writeProvider: CalendarProvider = rc.write?.provider ?? new MockCalendarProvider();
   const writeCalendarId = rc.write?.calendarId ?? 'primary';
   const writeConnectionId = rc.write?.connectionId;
@@ -136,11 +138,11 @@ export async function createBooking(
     // Count the day in the MEMBER's own schedule timezone (falls back to the
     // legacy event-type schedule when the member has no default schedule).
     const scheduleId = member?.defaultScheduleId || eventType.availabilityScheduleId;
-    const schedule = scheduleId ? await loadSchedule(scheduleId) : null;
+    const schedule = scheduleId ? await loadSchedule(tenantId, scheduleId) : null;
     const zone = schedule?.timezone ?? 'utc';
     const dayKey = DateTime.fromMillis(startMs, { zone }).toFormat('yyyy-MM-dd');
-    dayCounterRef = db
-      .collection(COL.dayCounters)
+    dayCounterRef = tenantDb(tenantId)
+      .dayCounters()
       .doc(`${sanitizeForDocId(memberId)}_${dayKey}`);
   }
 
@@ -150,7 +152,7 @@ export async function createBooking(
   // shared cell and loses. Different members are in disjoint key partitions.
   const cells = coveredCells(startMs, endMs, BASE_GRID_MINUTES);
   const lockIds = cells.map((c) => lockId(memberId, c));
-  const bookingRef = db.collection(COL.bookings).doc();
+  const bookingRef = tenantDb(tenantId).bookings().doc();
   const bookingId = bookingRef.id;
   const cancelToken = randomToken();
   const nowIso = new Date(nowMs).toISOString();
@@ -171,6 +173,7 @@ export async function createBooking(
 
   const booking: Booking = {
     id: bookingId,
+    tenantId,
     eventTypeId: eventType.id,
     eventTypeName: eventType.name,
     memberId,
@@ -207,7 +210,7 @@ export async function createBooking(
 
   try {
     await db.runTransaction(async (tx) => {
-      const lockRefs = lockIds.map((id) => db.collection(COL.slotLocks).doc(id));
+      const lockRefs = lockIds.map((id) => tenantDb(tenantId).slotLocks().doc(id));
       // All reads first.
       const [snaps, counterSnap] = await Promise.all([
         Promise.all(lockRefs.map((r) => tx.get(r))),
@@ -255,7 +258,7 @@ export async function createBooking(
   }
 
   // --- Side effects AFTER the transaction commits ------------------------
-  const branding = await loadBranding();
+  const branding = await loadBranding(tenantId);
   const host = memberName ?? branding.displayName;
   const withMeet = eventType.location.type === 'google_meet';
   let meetUrl: string | undefined;
@@ -277,7 +280,7 @@ export async function createBooking(
     logger.error('Calendar event creation failed; rolling back booking', {
       bookingId,
     });
-    await releaseBooking(booking).catch(() => undefined);
+    await releaseBooking(tenantId, booking).catch(() => undefined);
     throw serverError(
       'Could not reserve the time on the calendar. Please try again.',
       'calendar_failed',
@@ -301,7 +304,7 @@ export async function createBooking(
 
   // Confirmation email (idempotent; failure must not fail the booking).
   try {
-    await sendBookingConfirmation(booking, branding);
+    await sendBookingConfirmation(tenantId, booking, branding);
     await bookingRef.update({ confirmationSent: true });
     booking.confirmationSent = true;
   } catch (err) {
@@ -323,17 +326,18 @@ export async function createBooking(
 }
 
 /** Delete the booking doc + its slot locks and free its day-cap slot (rollback).
- * Uses the booking's STORED lockIds/dayCounterId so legacy (calendar-keyed) and
- * new (member-keyed) bookings both release the correct docs. */
-async function releaseBooking(booking: Booking): Promise<void> {
+ * Uses the booking's STORED lockIds/dayCounterId so legacy and new bookings both
+ * release the correct docs. */
+async function releaseBooking(tenantId: string, booking: Booking): Promise<void> {
+  const t = tenantDb(tenantId);
   const batch = db.batch();
-  batch.delete(db.collection(COL.bookings).doc(booking.id));
+  batch.delete(t.bookings().doc(booking.id));
   for (const id of booking.lockIds) {
-    batch.delete(db.collection(COL.slotLocks).doc(id));
+    batch.delete(t.slotLocks().doc(id));
   }
   if (booking.dayCounterId) {
     batch.set(
-      db.collection(COL.dayCounters).doc(booking.dayCounterId),
+      t.dayCounters().doc(booking.dayCounterId),
       { count: FieldValue.increment(-1) },
       { merge: true },
     );
@@ -342,10 +346,11 @@ async function releaseBooking(booking: Booking): Promise<void> {
 }
 
 export async function loadBookingForManage(
+  tenantId: string,
   bookingId: string,
   token: string,
 ): Promise<Booking> {
-  const snap = await db.collection(COL.bookings).doc(bookingId).get();
+  const snap = await tenantDb(tenantId).bookings().doc(bookingId).get();
   if (!snap.exists) throw notFound('Booking not found', 'no_booking');
   const booking = { id: snap.id, ...snap.data() } as Booking;
   if (!token || token !== booking.cancelToken) {
@@ -355,34 +360,36 @@ export async function loadBookingForManage(
 }
 
 export async function cancelBooking(
+  tenantId: string,
   bookingId: string,
   token: string,
   reason: string | undefined,
   nowMs = Date.now(),
 ): Promise<Booking> {
-  const booking = await loadBookingForManage(bookingId, token);
+  const booking = await loadBookingForManage(tenantId, bookingId, token);
   if (booking.status === 'cancelled') return booking; // idempotent
 
   // Delete the event with the SAME account token + calendar it was created on.
   // Prefer the booking's snapshotted calendarRef (connection + calendar) so a
   // later write-target reassignment to another account can't orphan the event;
   // fall back to the member's current write target for legacy bookings.
-  const memberId = booking.memberId || DEFAULT_MEMBER_ID;
+  const memberId = booking.memberId || (await ownerMemberId(tenantId));
   let provider: CalendarProvider;
   let calendarId: string;
   if (booking.calendarRef?.connectionId) {
-    const conn = await getConnectionProvider(memberId, booking.calendarRef.connectionId);
+    const conn = await getConnectionProvider(tenantId, memberId, booking.calendarRef.connectionId);
     provider = conn.provider;
     calendarId = booking.calendarRef.calendarId;
   } else {
-    const rc = await getMemberCalendar(memberId);
+    const rc = await getMemberCalendar(tenantId, memberId);
     provider = rc.write?.provider ?? new MockCalendarProvider();
     calendarId = rc.write?.calendarId ?? 'primary';
   }
 
   // Free the slot + mark cancelled.
+  const t = tenantDb(tenantId);
   const batch = db.batch();
-  batch.update(db.collection(COL.bookings).doc(bookingId), {
+  batch.update(t.bookings().doc(bookingId), {
     status: 'cancelled',
     cancelledAt: new Date(nowMs).toISOString(),
     cancelReason: reason?.slice(0, 500) || null,
@@ -390,11 +397,11 @@ export async function cancelBooking(
     remindersRemaining: [],
   });
   for (const id of booking.lockIds) {
-    batch.delete(db.collection(COL.slotLocks).doc(id));
+    batch.delete(t.slotLocks().doc(id));
   }
   if (booking.dayCounterId) {
     batch.set(
-      db.collection(COL.dayCounters).doc(booking.dayCounterId),
+      t.dayCounters().doc(booking.dayCounterId),
       { count: FieldValue.increment(-1) },
       { merge: true },
     );
@@ -409,8 +416,8 @@ export async function cancelBooking(
   }
 
   booking.status = 'cancelled';
-  const branding = await loadBranding();
-  await sendBookingCancellation(booking, branding).catch(() =>
+  const branding = await loadBranding(tenantId);
+  await sendBookingCancellation(tenantId, booking, branding).catch(() =>
     logger.error('Cancellation email failed', { bookingId }),
   );
   return booking;

@@ -27,9 +27,17 @@ export const GOOGLE_REDIRECT_URI = defineString('GOOGLE_REDIRECT_URI', {
 // OAuth redirect. Falls back to the request origin when empty.
 export const APP_BASE_URL = defineString('APP_BASE_URL', { default: '' });
 
-// Bootstrap owner: this verified email gets admin access without needing the
-// `admin` custom claim, so the owner can use /admin immediately after deploy.
+// Bootstrap owner (legacy single-tenant). Still read as a fallback for the
+// PLATFORM super-admin so existing deployments keep working without a new env.
 export const OWNER_EMAIL = defineString('OWNER_EMAIL', { default: '' });
+
+// Platform super-admin: this verified email can administer ANY tenant and mint
+// signup codes. Falls back to OWNER_EMAIL when unset.
+export const PLATFORM_OWNER_EMAIL = defineString('PLATFORM_OWNER_EMAIL', { default: '' });
+
+// Shared signup access code (first-deploy fallback before minted codes exist).
+// Self-serve onboarding accepts this value OR a matching hashed `signupCodes` doc.
+export const SIGNUP_ACCESS_CODE = defineString('SIGNUP_ACCESS_CODE', { default: '' });
 
 // Transactional email (Resend).
 export const RESEND_API_KEY = defineSecret('RESEND_API_KEY');

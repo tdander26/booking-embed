@@ -10,6 +10,8 @@ export default {
         'surface-3': 'var(--surface-3)',
         hair: 'var(--hair)',
         'hair-soft': 'var(--hair-soft)',
+        overlay: 'var(--overlay)',
+        'overlay-soft': 'var(--overlay-soft)',
         ink: 'var(--text)',
         muted: 'var(--text-muted)',
         faint: 'var(--text-faint)',
@@ -25,7 +27,7 @@ export default {
         sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
       },
       boxShadow: {
-        lux: '0 24px 60px -24px rgba(0,0,0,0.7)',
+        lux: '0 24px 60px -24px var(--shadow-lux)',
         'gold-glow': '0 8px 30px -8px var(--brand-glow)',
       },
       borderRadius: {

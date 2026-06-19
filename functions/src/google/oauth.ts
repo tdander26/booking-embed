@@ -1,6 +1,5 @@
 import { google } from 'googleapis';
-import { db, COL, GOOGLE_TOKENS_PATH } from '../firebase';
-import type { GoogleTokens, MemberCalendarRef } from '../types';
+import type { MemberCalendarRef } from '../types';
 
 // Scope set (v2 multi-account): create/delete events + read calendars & busy.
 // `calendar.readonly` covers calendarList.list AND freebusy reads, so the older
@@ -35,25 +34,6 @@ export function buildConsentUrl(client: OAuthClient, state: string): string {
     include_granted_scopes: true,
     state,
   });
-}
-
-export async function loadGoogleTokens(): Promise<GoogleTokens | null> {
-  const snap = await db
-    .collection(GOOGLE_TOKENS_PATH.col)
-    .doc(GOOGLE_TOKENS_PATH.doc)
-    .get();
-  return snap.exists ? (snap.data() as GoogleTokens) : null;
-}
-
-export async function saveGoogleTokens(t: GoogleTokens): Promise<void> {
-  await db
-    .collection(GOOGLE_TOKENS_PATH.col)
-    .doc(GOOGLE_TOKENS_PATH.doc)
-    .set(t, { merge: true });
-}
-
-export async function clearGoogleTokens(): Promise<void> {
-  await db.collection(GOOGLE_TOKENS_PATH.col).doc(GOOGLE_TOKENS_PATH.doc).delete();
 }
 
 // ---------- Multi-account: enumerate calendars + identify the account ----------
@@ -120,5 +100,3 @@ export async function fetchAccountEmail(oauth: OAuthClient): Promise<string> {
   }
   return '(unknown)';
 }
-
-export { COL };

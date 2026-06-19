@@ -20,6 +20,7 @@ export async function sendEmail(opts: {
   subject: string;
   html: string;
   text?: string;
+  from?: string; // per-tenant sender; falls back to the shared EMAIL_FROM
   idempotencyKey?: string;
 }): Promise<string | null> {
   const key = secret();
@@ -35,7 +36,7 @@ export async function sendEmail(opts: {
   const resend = new Resend(key);
   const { data, error } = await resend.emails.send(
     {
-      from: EMAIL_FROM.value(),
+      from: opts.from || EMAIL_FROM.value(),
       to: [opts.to],
       subject: opts.subject,
       html: opts.html,

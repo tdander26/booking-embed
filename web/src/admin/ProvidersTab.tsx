@@ -63,7 +63,7 @@ export function ProvidersTab({ me }: { me: AdminMe | null }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const isOwner = me?.isOwner ?? false;
+  const isOwner = me?.role === 'owner' || me?.role === 'platform';
 
   const load = () =>
     Promise.all([api.adminGetMembers(), api.adminGetSchedules()])
@@ -184,7 +184,7 @@ export function ProvidersTab({ me }: { me: AdminMe | null }) {
                     </span>
                   )}
                   {!m.active && (
-                    <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-muted">
+                    <span className="rounded-full bg-overlay px-2 py-0.5 text-xs text-muted">
                       inactive
                     </span>
                   )}
@@ -236,7 +236,7 @@ function MemberEditor({
   err: string | null;
 }) {
   const set = (patch: Partial<Member>) => onChange({ ...value, ...patch });
-  const isOwner = me?.isOwner ?? false;
+  const isOwner = me?.role === 'owner' || me?.role === 'platform';
   const isSelf = !!value.id && value.id === me?.memberId;
   // The owner's own record always stays an admin and can't lock itself out.
   const lockAdmin = !isOwner || (isSelf && isOwner);
@@ -576,7 +576,7 @@ function MemberGooglePanel({
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => refresh(conn.id)}
-                        className="rounded-lg p-2 text-faint hover:bg-white/5 hover:text-muted"
+                        className="rounded-lg p-2 text-faint hover:bg-overlay hover:text-muted"
                         aria-label="Refresh calendars"
                         title="Refresh calendar list"
                       >
@@ -617,7 +617,7 @@ function MemberGooglePanel({
                             />
                             <span className="truncate text-ink">{cal.summary}</span>
                             {cal.primary && (
-                              <span className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-faint">
+                              <span className="rounded bg-overlay px-1.5 py-0.5 text-[11px] text-faint">
                                 primary
                               </span>
                             )}

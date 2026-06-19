@@ -17,8 +17,43 @@
 
 export type LocationType = 'google_meet' | 'phone' | 'in_person' | 'custom';
 export type BookingStatus = 'confirmed' | 'cancelled';
+/** Booking-page color theme. 'auto' follows the visitor's device preference. */
+export type ThemeMode = 'dark' | 'light' | 'auto';
 
-/** Public, non-sensitive branding shown on the booking page (global, shared). */
+// ---------- Tenants (practices) ----------
+
+export type TenantStatus = 'active' | 'suspended';
+
+/**
+ * A practice. The doc id IS the URL slug (lowercased, validated, unique,
+ * immutable in v1). Branding fields live directly on this doc (the tenant doc is
+ * exactly the public-readable surface). `tenants/{slug}`.
+ */
+export interface Tenant {
+  slug: string; // == doc id
+  practiceName: string;
+  status: TenantStatus;
+  ownerMemberId: string; // the founding member (role:'owner')
+  ownerEmail: string; // lowercased; the Google account that created the practice
+  signupCodeUsed?: string; // label/hash hint of the access code consumed (audit)
+  createdByIp?: string; // audit for takedown
+  // --- Branding (public-readable) ---
+  displayName: string; // shown on the booking page (defaults to practiceName)
+  tagline?: string;
+  avatarUrl?: string;
+  brandColor: string; // hex, e.g. "#C9A84C"
+  welcomeText?: string;
+  timezone: string; // clinic default IANA tz
+  emailFrom?: string; // optional per-tenant email sender; falls back to EMAIL_FROM
+  // --- Google Ads conversion tracking (public; fired client-side) ---
+  adsConversionId?: string; // e.g. "AW-123456789"
+  adsConversionLabel?: string; // e.g. "abCdEf…" (the conversion action label)
+  theme?: ThemeMode; // booking-page color theme (default 'dark')
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Public, non-sensitive branding shown on the booking page (per-tenant). */
 export interface Branding {
   displayName: string; // e.g. "Dr. Todd Anderson" (clinic-level)
   tagline?: string;
@@ -26,7 +61,22 @@ export interface Branding {
   brandColor: string; // hex, e.g. "#C9A84C"
   welcomeText?: string;
   timezone: string; // clinic default IANA tz
+  emailFrom?: string; // optional per-tenant email sender
+  adsConversionId?: string; // Google Ads conversion ID (AW-…), fired client-side
+  adsConversionLabel?: string; // Google Ads conversion action label
+  theme?: ThemeMode; // booking-page color theme (default 'dark')
   updatedAt: string;
+}
+
+/** Platform-level access code (hashed). Root collection `signupCodes/{sha256}`. */
+export interface SignupCode {
+  label: string;
+  maxUses: number;
+  uses: number;
+  active: boolean;
+  expiresAt?: string | null;
+  createdAt: string;
+  createdBy?: string;
 }
 
 // ---------- Members (providers) ----------
@@ -43,6 +93,9 @@ export interface Member {
   featured: boolean; // emphasized + shown first (Dr. Payne)
   sortOrder: number;
   isAdmin: boolean; // may sign in to /admin
+  /** Per-tenant authority. Exactly one 'owner' per tenant (can't be deleted/
+   * demoted). Absent on legacy docs => treated as 'admin'. */
+  role?: 'owner' | 'admin';
   timezone?: string; // optional display tz (falls back to schedule tz / branding)
   brandColor?: string; // optional per-provider accent
   defaultScheduleId: string | null; // availabilitySchedules/{id} this member owns
@@ -171,6 +224,7 @@ export interface AvailabilitySchedule {
 
 export interface Booking {
   id: string;
+  tenantId: string; // owning practice (also the parent doc id); stamped on every booking
   eventTypeId: string;
   eventTypeName: string; // denormalized snapshot
   memberId: string; // provider (legacy bookings backfilled to owner)
