@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import type { Booking, Branding } from '../types';
-import { manageUrl } from '../util/urls';
+import { manageUrl, appBaseUrl } from '../util/urls';
 import { formatAnswersText } from '../scheduling/answers';
 
 export interface EmailContent {
@@ -215,5 +215,111 @@ export function cancellationEmail(booking: Booking, branding: Branding): EmailCo
       branding,
       `Your appointment with ${hostName(booking, branding)} has been cancelled.`,
     ),
+  };
+}
+
+// ---------- Provider-facing notifications (the person being booked WITH) ----------
+
+/** Invitee contact + answers block, shown to the provider so they know who booked. */
+function inviteeBlock(booking: Booking): string {
+  const phone = booking.invitee.phone
+    ? `<div style="margin-top:4px;">📞 ${escapeHtml(booking.invitee.phone)}</div>`
+    : '';
+  return `
+    <table role="presentation" width="100%" style="background:#f8fafc;border-radius:10px;margin:4px 0 16px;">
+      <tr><td style="padding:16px 18px;">
+        <div style="font-weight:600;">${escapeHtml(booking.invitee.name)}</div>
+        <div style="margin-top:4px;">✉️ <a href="mailto:${escapeHtml(booking.invitee.email)}">${escapeHtml(booking.invitee.email)}</a></div>
+        ${phone}
+      </td></tr>
+    </table>
+    ${answersHtml(booking)}`;
+}
+
+function providerWhenLoc(booking: Booking, providerTz: string): string {
+  const when = fmtWhen(booking.startUtc, providerTz);
+  const loc = locationLine(booking);
+  return `
+    <table role="presentation" width="100%" style="background:#f8fafc;border-radius:10px;margin:4px 0 16px;">
+      <tr><td style="padding:16px 18px;">
+        <div style="font-weight:600;font-size:16px;">${escapeHtml(booking.eventTypeName)}</div>
+        <div style="margin-top:6px;">🗓 ${escapeHtml(when)}</div>
+        ${loc ? `<div style="margin-top:4px;">📍 ${escapeHtml(loc)}</div>` : ''}
+        <div style="margin-top:4px;color:#64748b;">⏱ ${booking.durationMinutes} minutes</div>
+      </td></tr>
+    </table>`;
+}
+
+/** New-booking notice sent to the provider. Time shown in the PROVIDER's tz. */
+export function providerNewBookingEmail(
+  booking: Booking,
+  branding: Branding,
+  providerTz: string,
+): EmailContent {
+  const base = appBaseUrl();
+  const adminLink = base
+    ? `<p style="font-size:13px;color:#64748b;">Manage in your <a href="${escapeHtml(base)}/admin" style="color:${escapeHtml(branding.brandColor || '#0f766e')};">scheduling admin</a>.</p>`
+    : '';
+  return {
+    subject: `New booking: ${booking.invitee.name} — ${booking.eventTypeName} (${fmtWhen(
+      booking.startUtc,
+      providerTz,
+    )})`,
+    html: shell(
+      branding,
+      'New booking',
+      `<p>${escapeHtml(booking.invitee.name)} just booked with you.</p>
+       ${providerWhenLoc(booking, providerTz)}
+       <div style="font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Who</div>
+       ${inviteeBlock(booking)}
+       ${adminLink}`,
+    ),
+    text: [
+      `New booking: ${booking.invitee.name} booked ${booking.eventTypeName}.`,
+      '',
+      fmtWhen(booking.startUtc, providerTz),
+      locationLine(booking),
+      '',
+      `Name:  ${booking.invitee.name}`,
+      `Email: ${booking.invitee.email}`,
+      booking.invitee.phone ? `Phone: ${booking.invitee.phone}` : '',
+      answersText(booking),
+      base ? `Admin: ${base}/admin` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  };
+}
+
+/** Cancellation notice sent to the provider. */
+export function providerCancellationEmail(
+  booking: Booking,
+  branding: Branding,
+  providerTz: string,
+): EmailContent {
+  return {
+    subject: `Cancelled: ${booking.invitee.name} — ${booking.eventTypeName} (${fmtWhen(
+      booking.startUtc,
+      providerTz,
+    )})`,
+    html: shell(
+      branding,
+      'Booking cancelled',
+      `<p>${escapeHtml(booking.invitee.name)} cancelled their booking.</p>
+       <table role="presentation" width="100%" style="background:#f8fafc;border-radius:10px;margin:4px 0 8px;">
+         <tr><td style="padding:16px 18px;">
+           <div style="font-weight:600;">${escapeHtml(booking.eventTypeName)}</div>
+           <div style="margin-top:6px;text-decoration:line-through;color:#94a3b8;">${escapeHtml(
+             fmtWhen(booking.startUtc, providerTz),
+           )}</div>
+           <div style="margin-top:6px;">${escapeHtml(booking.invitee.name)} · ${escapeHtml(booking.invitee.email)}</div>
+         </td></tr>
+       </table>`,
+    ),
+    text: [
+      `Cancelled: ${booking.invitee.name} cancelled ${booking.eventTypeName}.`,
+      fmtWhen(booking.startUtc, providerTz),
+      `${booking.invitee.name} · ${booking.invitee.email}`,
+    ].join('\n'),
   };
 }

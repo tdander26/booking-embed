@@ -7,9 +7,22 @@ import {
   confirmationEmail,
   reminderEmail,
   cancellationEmail,
+  providerNewBookingEmail,
+  providerCancellationEmail,
 } from './email/templates';
+import { loadMember } from './members';
 import { manageUrl } from './util/urls';
 import type { Booking, Branding } from './types';
+
+/** The provider's notification email + the timezone to show them times in. */
+async function providerContact(
+  booking: Booking,
+  branding: Branding,
+): Promise<{ email: string; tz: string } | null> {
+  const member = await loadMember(booking.memberId);
+  if (!member?.email) return null;
+  return { email: member.email, tz: member.timezone || branding.timezone };
+}
 
 /**
  * Durable "exactly once" guard. A deterministic doc id per (booking, kind) means
@@ -38,6 +51,7 @@ export async function sendBookingConfirmation(
   booking: Booking,
   branding: Branding,
 ): Promise<void> {
+  // 1) The person scheduling (invitee).
   await sendOnce(booking.id, 'confirm', async () => {
     const { subject, html, text } = confirmationEmail(booking, branding);
     await sendEmail({
@@ -48,6 +62,21 @@ export async function sendBookingConfirmation(
       idempotencyKey: `confirm/${booking.id}`,
     });
   });
+
+  // 2) The person being scheduled with (provider).
+  const provider = await providerContact(booking, branding);
+  if (provider) {
+    await sendOnce(booking.id, 'confirm-provider', async () => {
+      const { subject, html, text } = providerNewBookingEmail(booking, branding, provider.tz);
+      await sendEmail({
+        to: provider.email,
+        subject,
+        html,
+        text,
+        idempotencyKey: `confirm-provider/${booking.id}`,
+      });
+    });
+  }
 }
 
 export async function sendBookingReminder(
@@ -96,6 +125,20 @@ export async function sendBookingCancellation(
       idempotencyKey: `cancel/${booking.id}`,
     });
   });
+
+  const provider = await providerContact(booking, branding);
+  if (provider) {
+    await sendOnce(booking.id, 'cancel-provider', async () => {
+      const { subject, html, text } = providerCancellationEmail(booking, branding, provider.tz);
+      await sendEmail({
+        to: provider.email,
+        subject,
+        html,
+        text,
+        idempotencyKey: `cancel-provider/${booking.id}`,
+      });
+    });
+  }
 }
 
 export { manageUrl };
