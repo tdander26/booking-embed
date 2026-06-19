@@ -6,22 +6,27 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import { CalendarDays, Clock, ListChecks, Settings, LogOut } from 'lucide-react';
+import { CalendarDays, Clock, ListChecks, Settings, LogOut, Users, Code } from 'lucide-react';
 import { getFirebaseAuth } from '../lib/firebase';
 import * as api from '../api/client';
 import { ApiError } from '../api/client';
+import type { AdminMe } from '../api/types';
 import { Spinner, Button, Banner, Card } from '../components/ui';
 import { EventTypesTab } from './EventTypesTab';
+import { ProvidersTab } from './ProvidersTab';
 import { SchedulesTab } from './SchedulesTab';
 import { BookingsTab } from './BookingsTab';
+import { EmbedTab } from './EmbedTab';
 import { SettingsTab } from './SettingsTab';
 
-type Tab = 'bookings' | 'eventTypes' | 'schedules' | 'settings';
+type Tab = 'bookings' | 'eventTypes' | 'providers' | 'schedules' | 'embed' | 'settings';
 
 const TABS: { key: Tab; label: string; icon: typeof Clock }[] = [
   { key: 'bookings', label: 'Bookings', icon: ListChecks },
   { key: 'eventTypes', label: 'Event types', icon: CalendarDays },
+  { key: 'providers', label: 'Providers', icon: Users },
   { key: 'schedules', label: 'Availability', icon: Clock },
+  { key: 'embed', label: 'Embed', icon: Code },
   { key: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -52,6 +57,7 @@ export function AdminApp() {
   const auth = getFirebaseAuth();
   const [user, setUser] = useState<User | null | undefined>(undefined);
   const [adminOk, setAdminOk] = useState<boolean | null>(null);
+  const [me, setMe] = useState<AdminMe | null>(null);
   const [tab, setTab] = useState<Tab>('bookings');
 
   useEffect(() => onAuthStateChanged(auth, setUser), [auth]);
@@ -59,6 +65,7 @@ export function AdminApp() {
   useEffect(() => {
     if (!user) {
       setAdminOk(null);
+      setMe(null);
       return;
     }
     api
@@ -66,6 +73,14 @@ export function AdminApp() {
       .then(() => setAdminOk(true))
       .catch((e: ApiError) => setAdminOk(e.status === 403 ? false : true));
   }, [user]);
+
+  useEffect(() => {
+    if (adminOk !== true) {
+      setMe(null);
+      return;
+    }
+    api.adminMe().then(setMe).catch(() => setMe(null));
+  }, [adminOk]);
 
   if (user === undefined)
     return (
@@ -90,11 +105,8 @@ export function AdminApp() {
       {adminOk === false ? (
         <Card className="p-6">
           <Banner kind="error">
-            {user.email} is signed in but isn't an admin yet. Run{' '}
-            <code className="rounded bg-white/5 px-1 text-brand-light">
-              npm run grant-admin {user.email}
-            </code>{' '}
-            then sign out and back in.
+            {user.email} is signed in but isn't an admin yet. Ask Dr. Anderson to add you as a
+            provider with admin access, then sign out and back in.
           </Banner>
         </Card>
       ) : (
@@ -122,7 +134,9 @@ export function AdminApp() {
 
           {tab === 'bookings' && <BookingsTab />}
           {tab === 'eventTypes' && <EventTypesTab />}
+          {tab === 'providers' && <ProvidersTab me={me} />}
           {tab === 'schedules' && <SchedulesTab />}
+          {tab === 'embed' && <EmbedTab />}
           {tab === 'settings' && <SettingsTab />}
         </>
       )}

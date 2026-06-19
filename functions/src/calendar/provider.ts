@@ -1,11 +1,23 @@
 /**
- * Calendar abstraction. The Google implementation talks to the owner's real
- * calendar; the mock implementation lets the entire booking flow run locally in
- * the emulator (and before OAuth is connected) with no external calls.
+ * Calendar abstraction.
+ *
+ * v2 (multi-provider, multi-account): each member can connect N Google accounts,
+ * each account exposing several calendars. Conflict-checking ("busy") unions
+ * every SELECTED calendar across every ACTIVE connection; event creation targets
+ * a single WRITE calendar (member.writeConnectionId / writeCalendarId).
+ *
+ * The mock implementation lets the entire booking flow run locally in the
+ * emulator (and before any account is connected) with no external calls.
+ *
+ * Back-compat: the legacy global `getCalendarProvider()` (reading the single
+ * `private/google` token) is preserved so the deployed single-provider site
+ * keeps working until members are seeded + the token migrated.
  */
+import { logger } from 'firebase-functions';
 import type { Interval } from '../scheduling/slots';
 import { isEmulator, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } from '../config';
 import { loadGoogleTokens } from '../google/oauth';
+import { loadMember, loadActiveConnections, loadConnection, setConnectionStatus } from '../members';
 import { GoogleCalendarProvider } from './google';
 import { MockCalendarProvider } from './mock';
 
@@ -31,6 +43,8 @@ export interface CalendarProvider {
   deleteEvent(calendarId: string, eventId: string): Promise<void>;
 }
 
+// ---------- Legacy single-provider resolution (kept for migration) ----------
+
 export interface ResolvedProvider {
   provider: CalendarProvider;
   calendarId: string;
@@ -39,8 +53,9 @@ export interface ResolvedProvider {
 }
 
 /**
- * Pick the provider: mock inside the emulator or when no calendar is connected,
- * otherwise the real Google provider built from the stored refresh token.
+ * Pick the legacy global provider: mock inside the emulator or when no calendar
+ * is connected, otherwise the real Google provider built from the single stored
+ * refresh token (`private/google`). Member-aware callers use `getMemberCalendar`.
  */
 export async function getCalendarProvider(): Promise<ResolvedProvider> {
   const tokens = await loadGoogleTokens();
@@ -59,3 +74,195 @@ export async function getCalendarProvider(): Promise<ResolvedProvider> {
   });
   return { provider, calendarId, connected: true, mock: false };
 }
+
+// ---------- Member-aware multi-account resolution ----------
+
+/** One Google account's provider + the selected calendars to read busy from. */
+export interface BusySource {
+  provider: GoogleCalendarProvider; // bound to ONE connection's refresh token
+  calendarIds: string[]; // selected calendars on that connection
+  connectionId: string; // for fail-open status flips on invalid_grant
+}
+
+export interface ResolvedMemberCalendar {
+  busySources: BusySource[]; // every active connection × its selected calendars
+  write: { provider: CalendarProvider; calendarId: string; connectionId: string } | null;
+  connected: boolean; // ≥1 active connection
+  mock: boolean; // no usable connection → mock for busy+write
+}
+
+function makeProvider(refreshToken: string): GoogleCalendarProvider {
+  return new GoogleCalendarProvider({
+    clientId: GOOGLE_CLIENT_ID.value(),
+    clientSecret: GOOGLE_CLIENT_SECRET.value(),
+    redirectUri: GOOGLE_REDIRECT_URI.value() || '',
+    refreshToken,
+  });
+}
+
+/**
+ * Resolve a member's calendars for both conflict-checking and event creation.
+ *
+ * - Emulator or no active connections → all-mock (busy empty, write via mock) so
+ *   any not-yet-connected member stays demoable and never dead-ends.
+ * - Otherwise: one GoogleCalendarProvider per ACTIVE connection (tokens are NOT
+ *   interchangeable across accounts), each carrying its SELECTED calendar ids.
+ * - Write target: member.writeConnectionId / writeCalendarId. If unset but there
+ *   is exactly one active connection, fall back to that connection's primary (or
+ *   first writable) calendar. If still unresolvable → write:null (callers fall
+ *   back to mock event creation + flag googleSyncError; booking still succeeds).
+ */
+export async function getMemberCalendar(memberId: string): Promise<ResolvedMemberCalendar> {
+  if (isEmulator()) {
+    return { busySources: [], write: null, connected: false, mock: true };
+  }
+
+  const [member, connections] = await Promise.all([
+    loadMember(memberId),
+    loadActiveConnections(memberId),
+  ]);
+
+  if (connections.length === 0) {
+    return { busySources: [], write: null, connected: false, mock: true };
+  }
+
+  // One provider per connection; reuse instances for the write lookup below.
+  const providerByConn = new Map<string, GoogleCalendarProvider>();
+  const busySources: BusySource[] = [];
+  for (const c of connections) {
+    const provider = makeProvider(c.refreshToken);
+    providerByConn.set(c.id, provider);
+    const calendarIds = (c.calendars ?? []).filter((cal) => cal.selected).map((cal) => cal.calendarId);
+    // A connection with zero selected calendars contributes no busy source.
+    if (calendarIds.length > 0) {
+      busySources.push({ provider, calendarIds, connectionId: c.id });
+    }
+  }
+
+  // Resolve the write target.
+  let write: ResolvedMemberCalendar['write'] = null;
+  const wantedConnId = member?.writeConnectionId;
+  const wantedCalId = member?.writeCalendarId;
+  if (wantedConnId && wantedCalId) {
+    const conn = connections.find((c) => c.id === wantedConnId);
+    // Re-validate the stored target: the calendar must still exist on the
+    // connection AND still be writable (a Google access-role downgrade flips
+    // `writable` on the next refresh). If stale, fall through to the fallback so
+    // we never try to write to a now-read-only calendar.
+    const cal = conn?.calendars?.find((c) => c.calendarId === wantedCalId);
+    if (conn && cal?.writable) {
+      write = {
+        provider: providerByConn.get(conn.id)!,
+        calendarId: wantedCalId,
+        connectionId: conn.id,
+      };
+    }
+  }
+  if (!write && connections.length === 1) {
+    // Single-connection fallback: primary writable calendar, else first writable.
+    const conn = connections[0];
+    const cals = conn.calendars ?? [];
+    const target = cals.find((c) => c.primary && c.writable) ?? cals.find((c) => c.writable);
+    if (target) {
+      write = {
+        provider: providerByConn.get(conn.id)!,
+        calendarId: target.calendarId,
+        connectionId: conn.id,
+      };
+    }
+  }
+
+  return { busySources, write, connected: true, mock: false };
+}
+
+/**
+ * Provider bound to a SPECIFIC connection (account), used on cancel so the
+ * event is deleted with the same account's token it was created with — even if
+ * the member's write target was reassigned to another account in between.
+ * Falls back to mock in the emulator or when the connection is gone/revoked.
+ */
+export async function getConnectionProvider(
+  memberId: string,
+  connectionId: string,
+): Promise<{ provider: CalendarProvider; mock: boolean }> {
+  if (isEmulator()) return { provider: new MockCalendarProvider(), mock: true };
+  const conn = await loadConnection(memberId, connectionId);
+  if (conn && conn.status === 'active' && conn.refreshToken) {
+    return { provider: makeProvider(conn.refreshToken), mock: false };
+  }
+  return { provider: new MockCalendarProvider(), mock: true };
+}
+
+/** Heuristic: was this Google error an invalid/revoked refresh token? */
+function isInvalidGrant(err: unknown): boolean {
+  const anyErr = err as { message?: string; response?: { data?: { error?: string } } } | undefined;
+  const code = anyErr?.response?.data?.error;
+  if (code === 'invalid_grant') return true;
+  return typeof anyErr?.message === 'string' && anyErr.message.includes('invalid_grant');
+}
+
+/**
+ * Union of busy intervals across every selected calendar of every active
+ * connection. Fail-open per account: one account's failure contributes no busy
+ * (the WRITE path is the safety net against double-booking). On invalid_grant we
+ * flip that connection to `revoked` so the admin UI can prompt a re-connect.
+ *
+ * Merge = concatenation: `filterSlots` rejects a candidate that overlaps ANY
+ * busy interval, so concatenation IS the correct union — no coalescing needed.
+ */
+export async function memberBusy(
+  rc: ResolvedMemberCalendar,
+  fromIso: string,
+  toIso: string,
+): Promise<Interval[]> {
+  const lists = await Promise.all(
+    rc.busySources.map((s) =>
+      s.provider.getBusyMulti(s.calendarIds, fromIso, toIso).catch((err) => {
+        if (isInvalidGrant(err)) {
+          // Best-effort status flip; never let it break availability.
+          // memberId isn't on the source, so we can't scope it here — the
+          // refresh/write endpoints (admin) do the authoritative flip. We log
+          // only the reason (no tokens / PHI) for observability.
+          logger.warn('member calendar token rejected', { connectionId: s.connectionId, reason: 'invalid_grant' });
+        } else {
+          logger.warn('member busy fetch failed', { connectionId: s.connectionId });
+        }
+        return [] as Interval[];
+      }),
+    ),
+  );
+  return lists.flat();
+}
+
+/**
+ * Member-scoped variant that knows the memberId, so an invalid_grant can be
+ * persisted (status → revoked) on the right connection doc. Prefer this from the
+ * availability/booking layers where memberId is already in hand.
+ */
+export async function memberBusyForMember(
+  memberId: string,
+  rc: ResolvedMemberCalendar,
+  fromIso: string,
+  toIso: string,
+): Promise<Interval[]> {
+  const lists = await Promise.all(
+    rc.busySources.map((s) =>
+      s.provider.getBusyMulti(s.calendarIds, fromIso, toIso).catch(async (err) => {
+        if (isInvalidGrant(err)) {
+          try {
+            await setConnectionStatus(memberId, s.connectionId, 'revoked');
+          } catch {
+            /* ignore — flagging is best-effort */
+          }
+          logger.warn('member calendar token revoked', { connectionId: s.connectionId, reason: 'invalid_grant' });
+        } else {
+          logger.warn('member busy fetch failed', { connectionId: s.connectionId });
+        }
+        return [] as Interval[];
+      }),
+    ),
+  );
+  return lists.flat();
+}
+
+export { MockCalendarProvider };

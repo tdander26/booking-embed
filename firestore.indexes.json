@@ -23,6 +23,15 @@
         { "fieldPath": "eventTypeId", "order": "ASCENDING" },
         { "fieldPath": "startUtc", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "bookings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "startUtc", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

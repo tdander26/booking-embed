@@ -1,11 +1,41 @@
 import { DateTime } from 'luxon';
 import type { Booking, Branding } from '../types';
 import { manageUrl } from '../util/urls';
+import { formatAnswersText } from '../scheduling/answers';
 
 export interface EmailContent {
   subject: string;
   html: string;
   text: string;
+}
+
+/** Provider shown to the invitee — chosen member, falling back to the host. */
+function hostName(booking: Booking, branding: Branding): string {
+  return booking.memberName || branding.displayName;
+}
+
+/** Rendered intake answers (snapshot on the booking) as an HTML block, or '' . */
+function answersHtml(booking: Booking): string {
+  const text = formatAnswersText(booking.answers ?? []);
+  if (!text) return '';
+  const rows = text
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => `<div style="margin-top:4px;">${escapeHtml(line)}</div>`)
+    .join('');
+  return `
+    <table role="presentation" width="100%" style="background:#f8fafc;border-radius:10px;margin:0 0 20px;">
+      <tr><td style="padding:14px 18px;">
+        <div style="font-weight:600;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Your answers</div>
+        ${rows}
+      </td></tr>
+    </table>`;
+}
+
+/** Rendered intake answers as plain text (for the text/* part), or '' . */
+function answersText(booking: Booking): string {
+  const text = formatAnswersText(booking.answers ?? []);
+  return text ? `\n${text}\n` : '';
 }
 
 function fmtWhen(iso: string, tz: string): string {
@@ -74,15 +104,18 @@ function detailsBlock(booking: Booking, branding: Branding): string {
   const loc = locationLine(booking);
   const brand = escapeHtml(branding.brandColor || '#0f766e');
   const manage = manageUrl(booking.id, booking.cancelToken);
+  const provider = hostName(booking, branding);
   return `
     <table role="presentation" width="100%" style="background:#f8fafc;border-radius:10px;margin:4px 0 20px;">
       <tr><td style="padding:16px 18px;">
         <div style="font-weight:600;font-size:16px;">${escapeHtml(booking.eventTypeName)}</div>
+        <div style="margin-top:4px;color:#64748b;">with ${escapeHtml(provider)}</div>
         <div style="margin-top:6px;">🗓 ${escapeHtml(when)}</div>
         ${loc ? `<div style="margin-top:4px;">📍 ${escapeHtml(loc)}</div>` : ''}
         <div style="margin-top:4px;color:#64748b;">⏱ ${booking.durationMinutes} minutes</div>
       </td></tr>
     </table>
+    ${answersHtml(booking)}
     ${
       booking.location.type === 'google_meet' && booking.location.meetUrl
         ? `<p><a href="${escapeHtml(booking.location.meetUrl)}" style="display:inline-block;background:${brand};color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600;">Join Google Meet</a></p>`
@@ -99,10 +132,11 @@ function textVersion(booking: Booking, branding: Branding, lead: string): string
     lead,
     '',
     booking.eventTypeName,
+    `with ${hostName(booking, branding)}`,
     when,
     locationLine(booking),
     `${booking.durationMinutes} minutes`,
-    '',
+    answersText(booking),
     `Manage: ${manageUrl(booking.id, booking.cancelToken)}`,
   ]
     .filter(Boolean)
@@ -110,7 +144,7 @@ function textVersion(booking: Booking, branding: Branding, lead: string): string
 }
 
 export function confirmationEmail(booking: Booking, branding: Branding): EmailContent {
-  const heading = `You're booked with ${branding.displayName}`;
+  const heading = `You're booked with ${hostName(booking, branding)}`;
   return {
     subject: `Confirmed: ${booking.eventTypeName} — ${fmtWhen(
       booking.startUtc,
@@ -145,13 +179,13 @@ export function reminderEmail(
       branding,
       `Reminder: your appointment is in ${soon}`,
       `<p>Hi ${escapeHtml(booking.invitee.name)}, this is a reminder of your upcoming time with ${escapeHtml(
-        branding.displayName,
+        hostName(booking, branding),
       )}.</p>${detailsBlock(booking, branding)}`,
     ),
     text: textVersion(
       booking,
       branding,
-      `Reminder: your appointment with ${branding.displayName} is in ${soon}.`,
+      `Reminder: your appointment with ${hostName(booking, branding)} is in ${soon}.`,
     ),
   };
 }
@@ -169,6 +203,7 @@ export function cancellationEmail(booking: Booking, branding: Branding): EmailCo
        <table role="presentation" width="100%" style="background:#f8fafc;border-radius:10px;margin:4px 0 8px;">
          <tr><td style="padding:16px 18px;">
            <div style="font-weight:600;">${escapeHtml(booking.eventTypeName)}</div>
+           <div style="margin-top:4px;color:#64748b;">with ${escapeHtml(hostName(booking, branding))}</div>
            <div style="margin-top:6px;text-decoration:line-through;color:#94a3b8;">${escapeHtml(
              fmtWhen(booking.startUtc, booking.invitee.timezone),
            )}</div>
@@ -178,7 +213,7 @@ export function cancellationEmail(booking: Booking, branding: Branding): EmailCo
     text: textVersion(
       booking,
       branding,
-      `Your appointment with ${branding.displayName} has been cancelled.`,
+      `Your appointment with ${hostName(booking, branding)} has been cancelled.`,
     ),
   };
 }

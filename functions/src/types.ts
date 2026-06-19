@@ -9,21 +9,100 @@
  * "Wall-clock" config (availability windows, override dates) is stored in the
  * schedule's own IANA timezone as "HH:mm" / "YYYY-MM-DD" and only converted to
  * UTC at availability-computation time.
+ *
+ * v2 (multi-provider): a `members` collection holds providers (Dr. Anderson,
+ * Dr. Payne …). Event types are offered by one or more members; each member has
+ * their own availability schedule and their own Google calendar connections.
  */
 
 export type LocationType = 'google_meet' | 'phone' | 'in_person' | 'custom';
 export type BookingStatus = 'confirmed' | 'cancelled';
 
-/** Public, non-sensitive branding shown on the booking page. */
+/** Public, non-sensitive branding shown on the booking page (global, shared). */
 export interface Branding {
-  displayName: string; // e.g. "Dr. Todd Anderson"
+  displayName: string; // e.g. "Dr. Todd Anderson" (clinic-level)
   tagline?: string;
   avatarUrl?: string;
-  brandColor: string; // hex, e.g. "#0f766e"
+  brandColor: string; // hex, e.g. "#C9A84C"
   welcomeText?: string;
-  timezone: string; // owner's IANA tz, e.g. "America/Chicago"
+  timezone: string; // clinic default IANA tz
   updatedAt: string;
 }
+
+// ---------- Members (providers) ----------
+
+/** A bookable provider. id is immutable (e.g. "mbr_todd", "mbr_anna"). */
+export interface Member {
+  id: string;
+  name: string; // "Dr. Anna Payne"
+  title?: string; // "Functional Medicine"
+  email: string; // lowercased; matched against the Firebase Auth admin email
+  avatarUrl?: string;
+  bio?: string;
+  active: boolean; // hidden from the booking flow when false
+  featured: boolean; // emphasized + shown first (Dr. Payne)
+  sortOrder: number;
+  isAdmin: boolean; // may sign in to /admin
+  timezone?: string; // optional display tz (falls back to schedule tz / branding)
+  brandColor?: string; // optional per-provider accent
+  defaultScheduleId: string | null; // availabilitySchedules/{id} this member owns
+  // Where confirmed events are written: a connection + a calendar within it.
+  writeConnectionId?: string;
+  writeCalendarId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A calendar within a connected Google account. */
+export interface MemberCalendarRef {
+  calendarId: string; // Google calendarList entry id (often an email)
+  summary: string; // display label, snapshot at connect time
+  primary?: boolean;
+  accessRole?: string; // owner | writer | reader | freeBusyReader
+  selected: boolean; // include this calendar's busy times in availability
+  writable: boolean; // accessRole in {owner,writer} — eligible as write target
+}
+
+/** members/{memberId}/connections/{connId} — SERVER-ONLY (holds refresh token).
+ * connId = sanitizeForDocId(accountEmail) so re-connecting an account upserts. */
+export interface MemberConnection {
+  id: string;
+  accountEmail: string; // lowercased Google account that consented
+  refreshToken: string; // SECRET — never sent to the client
+  scope?: string;
+  status: 'active' | 'revoked';
+  calendars: MemberCalendarRef[];
+  lastSyncedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------- Custom intake questions ----------
+
+export type QuestionType = 'text' | 'textarea' | 'dropdown' | 'checkboxes' | 'checkbox';
+
+/** A custom intake question defined on an event type. id is stable + immutable. */
+export interface IntakeQuestion {
+  id: string; // e.g. "q_a1b2c3"; never reused/renamed
+  type: QuestionType;
+  label: string;
+  required: boolean;
+  options?: string[]; // dropdown | checkboxes only
+  placeholder?: string; // text | textarea
+  helpText?: string;
+  sortOrder: number;
+}
+
+/** A stored answer — label/type snapshotted so historical bookings survive
+ * question edits/deletes (stable-id rule). */
+export interface BookingAnswer {
+  questionId: string;
+  label: string;
+  type: QuestionType;
+  value: string | string[] | boolean; // text/textarea/dropdown=string; checkboxes=string[]; checkbox=boolean
+}
+
+// ---------- Event types / schedules ----------
 
 export interface EventType {
   id: string;
@@ -34,27 +113,35 @@ export interface EventType {
   active: boolean;
   color: string; // hex
   location: { type: LocationType; details?: string };
-  availabilityScheduleId: string;
+
+  /** Providers offering this type, in display priority order. Empty/absent =>
+   * legacy single-provider (treat as the owner member). */
+  memberIds: string[];
+  /** Custom intake questions (absent/[] => name + email + phone + notes only). */
+  questions: IntakeQuestion[];
+
+  /** @deprecated legacy single-schedule pointer; per-member scheduling resolves
+   * the schedule from member.defaultScheduleId. Kept for back-compat. */
+  availabilityScheduleId?: string;
 
   // Scheduling rules
   bufferBeforeMinutes: number;
   bufferAfterMinutes: number;
-  minNoticeMinutes: number; // earliest bookable offset from "now"
-  maxDaysInFuture: number; // furthest-out bookable day
-  slotIntervalMinutes: number; // granularity of offered start times (e.g. 15/30)
-  dailyBookingLimit: number | null; // cap bookings per day, null = unlimited
+  minNoticeMinutes: number;
+  maxDaysInFuture: number;
+  slotIntervalMinutes: number;
+  dailyBookingLimit: number | null;
   collectPhone: boolean;
-  remindersMinutesBefore: number[]; // e.g. [1440, 60] => 24h + 1h before
+  remindersMinutesBefore: number[];
 
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
 }
 
-/** A bookable window within a day, expressed in the schedule's timezone. */
 export interface DayWindow {
   start: string; // "09:00"
-  end: string; // "17:00"
+  end: string; // "17:00" (or "24:00")
 }
 
 /** weekday 0=Sunday … 6=Saturday → list of windows */
@@ -68,9 +155,10 @@ export interface DateOverride {
 export interface AvailabilitySchedule {
   id: string;
   name: string;
-  timezone: string; // IANA tz the windows are expressed in
+  timezone: string;
   weekly: WeeklyRules;
   overrides: DateOverride[];
+  memberId?: string | null; // owning member (null/absent = legacy/global)
   createdAt: string;
   updatedAt: string;
 }
@@ -78,7 +166,9 @@ export interface AvailabilitySchedule {
 export interface Booking {
   id: string;
   eventTypeId: string;
-  eventTypeName: string; // denormalized snapshot at booking time
+  eventTypeName: string; // denormalized snapshot
+  memberId: string; // provider (legacy bookings backfilled to owner)
+  memberName?: string; // denormalized snapshot
   startUtc: string;
   endUtc: string;
   durationMinutes: number;
@@ -87,17 +177,19 @@ export interface Booking {
     email: string;
     phone?: string;
     notes?: string;
-    timezone: string; // tz the invitee booked in (for their display)
+    timezone: string;
   };
+  answers?: BookingAnswer[]; // custom intake answers (snapshotted)
   location: { type: LocationType; details?: string; meetUrl?: string };
   status: BookingStatus;
   googleEventId?: string;
-  googleSyncError?: string; // set if the calendar write failed (rare)
-  lockIds: string[]; // slotLocks docs this booking holds; deleted on cancel
-  dayCounterId?: string; // dayCounters doc to decrement on cancel (daily cap)
-  cancelToken: string; // unguessable; gates the manage/cancel/reschedule links
-  reminderDueUtc: string | null; // next reminder instant, null when none pending
-  remindersRemaining: number[]; // minutes-before values still to send
+  googleSyncError?: string;
+  calendarRef?: { connectionId: string; calendarId: string }; // where the event was written
+  lockIds: string[];
+  dayCounterId?: string;
+  cancelToken: string;
+  reminderDueUtc: string | null;
+  remindersRemaining: number[];
   confirmationSent: boolean;
   createdAt: string;
   cancelledAt?: string;
@@ -105,25 +197,26 @@ export interface Booking {
   source?: 'web' | 'embed';
 }
 
-/** Existence of this doc reserves a slot. Doc id = hash(calendarKey|startUtc). */
+/** Existence reserves a slot. Doc id = sanitize(memberId)_cell (per-member). */
 export interface SlotLock {
   bookingId: string;
+  memberId: string;
   eventTypeId: string;
   startUtc: string;
   endUtc: string;
   createdAt: string;
 }
 
-/** private/google — server-only secret. */
+/** @deprecated private/google — legacy single-tenant token, kept for migration. */
 export interface GoogleTokens {
   refreshToken: string;
-  calendarId: string; // calendar to read busy + write events, default "primary"
+  calendarId: string;
   connectedEmail?: string;
   scope?: string;
   updatedAt: string;
 }
 
-// ---------- API DTOs (function responses consumed by the web app) ----------
+// ---------- API DTOs ----------
 
 export interface AvailabilityDay {
   date: string; // "YYYY-MM-DD" in the requested (invitee) timezone
@@ -132,13 +225,23 @@ export interface AvailabilityDay {
 
 export interface AvailabilityResponse {
   eventTypeId: string;
-  timezone: string; // invitee tz used to group days
+  memberId?: string;
+  timezone: string;
   durationMinutes: number;
   days: AvailabilityDay[];
 }
 
-/** Public-safe projection of an EventType (no internal-only fields stripped, but
- * grouped for the booking page). */
+/** Public-safe provider projection for the picker (no email/admin fields). */
+export interface PublicProvider {
+  id: string;
+  name: string;
+  title?: string;
+  avatarUrl?: string;
+  bio?: string;
+  featured: boolean;
+  sortOrder: number;
+}
+
 export interface PublicEventType {
   id: string;
   slug: string;
@@ -148,18 +251,23 @@ export interface PublicEventType {
   color: string;
   location: { type: LocationType; details?: string };
   collectPhone: boolean;
+  collectNotes: boolean; // true when there are no custom questions (keep legacy notes box)
   minNoticeMinutes: number;
   maxDaysInFuture: number;
+  providers: PublicProvider[]; // [] => legacy single-provider type
+  questions: IntakeQuestion[];
 }
 
 export interface CreateBookingRequest {
   eventTypeId: string;
-  startUtc: string; // must match an offered slot
-  timezone: string; // invitee tz
+  memberId?: string; // required iff the type has providers
+  startUtc: string;
+  timezone: string;
   name: string;
   email: string;
   phone?: string;
   notes?: string;
+  answers?: Record<string, string | string[] | boolean>; // raw; validated server-side
   source?: 'web' | 'embed';
 }
 
@@ -171,5 +279,20 @@ export interface BookingConfirmation {
   timezone: string;
   eventTypeName: string;
   location: { type: LocationType; details?: string; meetUrl?: string };
-  displayName: string; // host
+  displayName: string; // clinic/host
+  providerName?: string; // chosen provider (falls back to displayName)
+}
+
+export interface NextAvailableProvider {
+  memberId: string;
+  nextDate: string | null; // "YYYY-MM-DD" in requested tz
+  nextSlotIso: string | null;
+  slotCountThatDay: number;
+  hasAvailability: boolean;
+}
+
+export interface NextAvailableResponse {
+  eventTypeId: string;
+  timezone: string;
+  providers: NextAvailableProvider[];
 }

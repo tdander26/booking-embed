@@ -1,16 +1,39 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import * as api from '../api/client';
-import type { PublicBranding, PublicEventType, BookingConfirmation } from '../api/types';
+import type {
+  PublicBranding,
+  PublicEventType,
+  PublicProvider,
+  NextAvailableResponse,
+  BookingConfirmation,
+} from '../api/types';
 import { applyBrand } from '../lib/brand';
 import { isEmbedded, useEmbedResize } from '../lib/embed';
+import { guessTimezone } from '../lib/time';
 import { Spinner, Banner } from '../components/ui';
 import { EventTypePicker } from './EventTypePicker';
+import { ProviderPicker } from './ProviderPicker';
 import { Scheduler } from './Scheduler';
 import { DetailsForm } from './DetailsForm';
 import { Confirmed } from './Confirmed';
 
-type Step = 'pick' | 'schedule' | 'details' | 'done';
+type Step = 'pick' | 'provider' | 'schedule' | 'details' | 'done';
+
+const params = new URLSearchParams(window.location.search);
+const slugParam = params.get('type');
+const providerParam = params.get('provider');
+
+/** featured-first, then sortOrder, then name (server should already do this; we
+ * defend against an unsorted payload). */
+function orderProviders(ps: PublicProvider[]): PublicProvider[] {
+  return [...ps].sort(
+    (a, b) =>
+      Number(b.featured) - Number(a.featured) ||
+      a.sortOrder - b.sortOrder ||
+      a.name.localeCompare(b.name),
+  );
+}
 
 export function BookingApp() {
   const embedded = isEmbedded();
@@ -21,11 +44,58 @@ export function BookingApp() {
 
   const [types, setTypes] = useState<PublicEventType[] | null>(null);
   const [selected, setSelected] = useState<PublicEventType | null>(null);
+  const [provider, setProvider] = useState<PublicProvider | null>(null);
+  const [nextAvail, setNextAvail] = useState<NextAvailableResponse | null>(null);
   const [slot, setSlot] = useState<{ iso: string; tz: string } | null>(null);
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
   const [step, setStep] = useState<Step>('pick');
 
-  const slugParam = new URLSearchParams(window.location.search).get('type');
+  // Timezone is lifted here so it persists across provider/schedule remounts.
+  const [tz, setTz] = useState<string>(guessTimezone() || 'UTC');
+  // Provider ids found fully-booked, so "see other provider" never loops.
+  const [exhausted, setExhausted] = useState<Set<string>>(new Set());
+
+  const prefetchNextAvailable = (t: PublicEventType, zone: string) => {
+    setNextAvail(null);
+    api
+      .getNextAvailable({
+        eventTypeId: t.id,
+        memberIds: t.providers.map((p) => p.id),
+        tz: zone,
+      })
+      .then(setNextAvail)
+      .catch(() => setNextAvail(null));
+  };
+
+  /** Route into the right step for a freshly-resolved (or deep-linked) type. */
+  const enterType = (t: PublicEventType, zone: string, preferProviderId?: string | null) => {
+    const ordered = orderProviders(t.providers);
+    const resolved: PublicEventType = { ...t, providers: ordered };
+    setSelected(resolved);
+    setProvider(null);
+    setExhausted(new Set());
+
+    if (ordered.length === 0) {
+      setStep('schedule'); // legacy single-provider
+      return;
+    }
+    if (preferProviderId) {
+      const match = ordered.find((p) => p.id === preferProviderId);
+      if (match) {
+        setProvider(match);
+        setStep('schedule');
+        return;
+      }
+      // bad/inactive provider param → fall through to provider step
+    }
+    if (ordered.length === 1) {
+      setProvider(ordered[0]);
+      setStep('schedule');
+      return;
+    }
+    setStep('provider');
+    prefetchNextAvailable(resolved, zone);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -36,11 +106,13 @@ export function BookingApp() {
         setBranding(b);
         applyBrand(b.brandColor);
         document.title = `Book with ${b.displayName}`;
+        // The invitee's local tz wins; fall back to the host's branding tz.
+        const zone = guessTimezone() || b.timezone || 'UTC';
+        setTz(zone);
         if (slugParam) {
           const t = await api.getEventType(slugParam);
           if (!alive) return;
-          setSelected(t);
-          setStep('schedule');
+          enterType(t, zone, providerParam);
         } else {
           const { eventTypes } = await api.getEventTypes();
           if (!alive) return;
@@ -71,14 +143,42 @@ export function BookingApp() {
     );
   }
 
+  const typeIsLocked = !!slugParam; // deep-linked: never go back past this type
+  const multiProvider = (selected?.providers.length ?? 0) > 1;
+
   const back = () => {
-    if (step === 'details') setStep('schedule');
-    else if (step === 'schedule' && !slugParam) {
-      setSelected(null);
-      setStep('pick');
+    if (step === 'details') {
+      setStep('schedule');
+    } else if (step === 'schedule') {
+      if (multiProvider && !provider) {
+        // shouldn't happen, but guard
+        setStep('provider');
+      } else if (multiProvider) {
+        setProvider(null);
+        setStep('provider');
+      } else if (!typeIsLocked) {
+        setSelected(null);
+        setStep('pick');
+      }
+    } else if (step === 'provider') {
+      if (!typeIsLocked) {
+        setSelected(null);
+        setProvider(null);
+        setStep('pick');
+      }
     }
   };
-  const canGoBack = step === 'details' || (step === 'schedule' && !slugParam);
+
+  const canGoBack =
+    step === 'details' ||
+    (step === 'schedule' && (multiProvider || !typeIsLocked)) ||
+    (step === 'provider' && !typeIsLocked);
+
+  const goToTypes = () => {
+    setSelected(null);
+    setProvider(null);
+    setStep('pick');
+  };
 
   return (
     <Shell embedded={embedded}>
@@ -103,22 +203,48 @@ export function BookingApp() {
             ) : (
               <EventTypePicker
                 types={types}
-                onSelect={(t) => {
-                  setSelected(t);
-                  setStep('schedule');
-                }}
+                onSelect={(t) => enterType(t, tz)}
               />
             )}
           </>
         )}
 
+        {step === 'provider' && selected && (
+          <ProviderPicker
+            providers={selected.providers}
+            nextAvail={nextAvail}
+            tz={tz}
+            onSelect={(p) => {
+              setProvider(p);
+              setStep('schedule');
+            }}
+          />
+        )}
+
         {step === 'schedule' && selected && (
           <Scheduler
             eventType={selected}
-            defaultTz={branding.timezone}
-            onPick={(iso, tz) => {
-              setSlot({ iso, tz });
+            provider={provider}
+            tz={tz}
+            onTzChange={setTz}
+            onPick={(iso, t) => {
+              setSlot({ iso, tz: t });
               setStep('details');
+            }}
+            onSwitchProvider={(p) => {
+              setProvider(p);
+              setStep('schedule');
+            }}
+            exhausted={exhausted}
+            onExhausted={(id) =>
+              setExhausted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
+            }
+            // Always provide an escape: a deep-linked single-provider type that's
+            // full would otherwise be a buttonless dead-end. When locked, reload
+            // to the full meeting-type list.
+            onBackToTypes={() => {
+              if (typeIsLocked) window.location.search = '';
+              else goToTypes();
             }}
           />
         )}
@@ -126,6 +252,7 @@ export function BookingApp() {
         {step === 'details' && selected && slot && (
           <DetailsForm
             eventType={selected}
+            provider={provider}
             slot={slot}
             embedded={embedded}
             onDone={(c) => {

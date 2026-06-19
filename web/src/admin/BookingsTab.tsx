@@ -63,10 +63,16 @@ export function BookingsTab() {
                     cancelled
                   </span>
                 )}
+                {b.status === 'confirmed' && b.googleSyncError && (
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-300">
+                    ⚠ not on calendar
+                  </span>
+                )}
               </div>
               <div className="text-sm text-muted">{b.invitee.email}</div>
               <div className="mt-1 text-sm text-muted">
-                {b.eventTypeName} · {fmtFull(b.startUtc, b.invitee.timezone)}
+                {b.eventTypeName}
+                {b.memberName ? ` · ${b.memberName}` : ''} · {fmtFull(b.startUtc, b.invitee.timezone)}
               </div>
               {b.invitee.notes && (
                 <div className="mt-1 text-xs text-faint">“{b.invitee.notes}”</div>

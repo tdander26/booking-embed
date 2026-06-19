@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Plus, Trash2, X, ExternalLink } from 'lucide-react';
 import * as api from '../api/client';
-import type { EventType, AvailabilitySchedule, LocationType } from '../api/types';
+import type { EventType, AvailabilitySchedule, Member, LocationType } from '../api/types';
 import { Spinner, Banner, Button, Card, Field, inputClass } from '../components/ui';
+import { QuestionBuilder, validateQuestions } from './QuestionBuilder';
 
 function emptyEventType(scheduleId: string): EventType {
   return {
@@ -14,6 +15,8 @@ function emptyEventType(scheduleId: string): EventType {
     active: true,
     color: '#0f766e',
     location: { type: 'google_meet' },
+    memberIds: [],
+    questions: [],
     availabilityScheduleId: scheduleId,
     bufferBeforeMinutes: 0,
     bufferAfterMinutes: 0,
@@ -27,18 +30,26 @@ function emptyEventType(scheduleId: string): EventType {
   };
 }
 
+function memberOrder(a: Member, b: Member): number {
+  if (a.featured !== b.featured) return a.featured ? -1 : 1;
+  if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+  return a.name.localeCompare(b.name);
+}
+
 export function EventTypesTab() {
   const [types, setTypes] = useState<EventType[] | null>(null);
   const [schedules, setSchedules] = useState<AvailabilitySchedule[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [editing, setEditing] = useState<EventType | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = () =>
-    Promise.all([api.adminGetEventTypes(), api.adminGetSchedules()])
-      .then(([t, s]) => {
+    Promise.all([api.adminGetEventTypes(), api.adminGetSchedules(), api.adminGetMembers()])
+      .then(([t, s, m]) => {
         setTypes(t.eventTypes);
         setSchedules(s.schedules);
+        setMembers([...m.members].sort(memberOrder));
       })
       .catch((e) => setErr((e as Error).message));
   useEffect(() => {
@@ -47,6 +58,15 @@ export function EventTypesTab() {
 
   const save = async () => {
     if (!editing) return;
+    if (editing.memberIds.length === 0) {
+      setErr('Assign at least one provider to this event type.');
+      return;
+    }
+    const qErr = validateQuestions(editing.questions);
+    if (qErr) {
+      setErr(qErr);
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -75,6 +95,7 @@ export function EventTypesTab() {
       <EventTypeEditor
         value={editing}
         schedules={schedules}
+        members={members}
         onChange={setEditing}
         onSave={save}
         onCancel={() => setEditing(null)}
@@ -88,14 +109,14 @@ export function EventTypesTab() {
     <div className="space-y-3">
       <div className="flex justify-end">
         <Button
-          disabled={schedules.length === 0}
+          disabled={members.length === 0}
           onClick={() => setEditing(emptyEventType(schedules[0]?.id ?? ''))}
         >
           <Plus size={16} /> New event type
         </Button>
       </div>
-      {schedules.length === 0 && (
-        <Banner kind="error">Create an availability schedule first (Availability tab).</Banner>
+      {members.length === 0 && (
+        <Banner kind="error">Add a provider first (Providers tab).</Banner>
       )}
       {types.length === 0 ? (
         <Card className="p-6 text-center text-sm text-faint">No event types yet.</Card>
@@ -150,6 +171,7 @@ function num(v: string, fallback: number): number {
 function EventTypeEditor({
   value,
   schedules,
+  members,
   onChange,
   onSave,
   onCancel,
@@ -158,6 +180,7 @@ function EventTypeEditor({
 }: {
   value: EventType;
   schedules: AvailabilitySchedule[];
+  members: Member[];
   onChange: (e: EventType) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -166,6 +189,14 @@ function EventTypeEditor({
 }) {
   const set = (patch: Partial<EventType>) => onChange({ ...value, ...patch });
   const [reminders, setReminders] = useState(value.remindersMinutesBefore.join(', '));
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const toggleMember = (id: string) => {
+    const has = value.memberIds.includes(id);
+    set({
+      memberIds: has ? value.memberIds.filter((x) => x !== id) : [...value.memberIds, id],
+    });
+  };
 
   const commitReminders = () => {
     const parsed = reminders
@@ -202,6 +233,47 @@ function EventTypeEditor({
               value={value.description ?? ''}
               onChange={(e) => set({ description: e.target.value })}
             />
+          </Field>
+        </div>
+
+        <div className="sm:col-span-2">
+          <Field
+            label="Providers"
+            hint="Who offers this meeting type. At least one is required."
+          >
+            {members.length === 0 ? (
+              <Banner kind="error">Add a provider first (Providers tab).</Banner>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {members.map((m) => {
+                  const on = value.memberIds.includes(m.id);
+                  return (
+                    <button
+                      type="button"
+                      key={m.id}
+                      onClick={() => toggleMember(m.id)}
+                      className={[
+                        'inline-flex min-h-[40px] items-center gap-2 rounded-xl border px-3 text-sm transition',
+                        on
+                          ? 'border-brand/60 bg-brand/10 text-brand-light'
+                          : 'border-hair-soft text-muted hover:border-brand/40 hover:text-ink',
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'inline-flex h-4 w-4 items-center justify-center rounded border text-[10px]',
+                          on ? 'border-brand bg-brand text-brand-fg' : 'border-hair',
+                        ].join(' ')}
+                      >
+                        {on ? '✓' : ''}
+                      </span>
+                      {m.name || m.email}
+                      {!m.active && <span className="text-xs text-faint">(inactive)</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </Field>
         </div>
 
@@ -244,19 +316,6 @@ function EventTypeEditor({
           />
         </Field>
 
-        <Field label="Availability schedule">
-          <select
-            className={inputClass}
-            value={value.availabilityScheduleId}
-            onChange={(e) => set({ availabilityScheduleId: e.target.value })}
-          >
-            {schedules.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </Field>
         <Field label="Color">
           <input
             type="color"
@@ -337,6 +396,47 @@ function EventTypeEditor({
           />
           Collect phone number
         </label>
+      </div>
+
+      <div className="mt-6">
+        <QuestionBuilder
+          questions={value.questions}
+          onChange={(questions) => set({ questions })}
+        />
+      </div>
+
+      <div className="mt-5 rounded-xl border border-hair-soft bg-surface-2/40">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-muted hover:text-ink"
+        >
+          <span>Advanced · legacy availability schedule</span>
+          <span className="text-faint">{showAdvanced ? '−' : '+'}</span>
+        </button>
+        {showAdvanced && (
+          <div className="border-t border-hair-soft p-4">
+            <p className="mb-3 text-xs text-faint">
+              Kept for back-compat. Availability is driven by the assigned providers' schedules;
+              this single schedule is used only by legacy single-provider logic until fully
+              migrated.
+            </p>
+            <Field label="Availability schedule">
+              <select
+                className={inputClass}
+                value={value.availabilityScheduleId ?? ''}
+                onChange={(e) => set({ availabilityScheduleId: e.target.value || undefined })}
+              >
+                <option value="">— None —</option>
+                {schedules.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        )}
       </div>
 
       <div className="mt-5 flex gap-2">

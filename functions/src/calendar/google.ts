@@ -1,4 +1,5 @@
 import { google, type calendar_v3 } from 'googleapis';
+import { logger } from 'firebase-functions';
 import { DateTime } from 'luxon';
 import { makeOAuthClient, saveGoogleTokens, loadGoogleTokens } from '../google/oauth';
 import { randomUUID } from '../util/ids';
@@ -41,29 +42,61 @@ export class GoogleCalendarProvider implements CalendarProvider {
     this.calendar = google.calendar({ version: 'v3', auth: oauth });
   }
 
+  /**
+   * Busy intervals across MANY calendars in ONE freebusy.query round-trip.
+   * Per-calendar errors (calendar removed / access lost) are logged and skipped
+   * rather than failing the whole query, so one bad calendar never blanks out
+   * an account's availability. Google caps freebusy.query at 50 items; the
+   * selected-calendar counts here stay well under that, but we chunk defensively.
+   */
+  async getBusyMulti(
+    calendarIds: string[],
+    fromIso: string,
+    toIso: string,
+  ): Promise<Interval[]> {
+    if (calendarIds.length === 0) return [];
+
+    const CHUNK = 50;
+    const out: Interval[] = [];
+    for (let i = 0; i < calendarIds.length; i += CHUNK) {
+      const ids = calendarIds.slice(i, i + CHUNK);
+      const res = await this.calendar.freebusy.query({
+        requestBody: {
+          timeMin: fromIso,
+          timeMax: toIso,
+          items: ids.map((id) => ({ id })),
+        },
+      });
+      for (const id of ids) {
+        const cal = res.data.calendars?.[id];
+        if (cal?.errors?.length) {
+          // Calendar removed / no access: skip it, don't fail the whole query.
+          // Log only the reason — never invitee data or tokens (HIPAA boundary).
+          logger.warn('freebusy calendar error', {
+            reason: cal.errors.map((e) => e.reason).join(','),
+          });
+          continue;
+        }
+        for (const b of cal?.busy ?? []) {
+          if (b.start && b.end) {
+            out.push({
+              start: DateTime.fromISO(b.start).toMillis(),
+              end: DateTime.fromISO(b.end).toMillis(),
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Single-calendar busy — thin wrapper over getBusyMulti (back-compat). */
   async getBusy(
     calendarId: string,
     fromIso: string,
     toIso: string,
   ): Promise<Interval[]> {
-    const res = await this.calendar.freebusy.query({
-      requestBody: {
-        timeMin: fromIso,
-        timeMax: toIso,
-        items: [{ id: calendarId }],
-      },
-    });
-    const cal = res.data.calendars?.[calendarId];
-    if (cal?.errors?.length) {
-      throw new Error(`freebusy error: ${cal.errors.map((e) => e.reason).join(',')}`);
-    }
-    const busy = cal?.busy ?? [];
-    return busy
-      .filter((b) => b.start && b.end)
-      .map((b) => ({
-        start: DateTime.fromISO(b.start!).toMillis(),
-        end: DateTime.fromISO(b.end!).toMillis(),
-      }));
+    return this.getBusyMulti([calendarId], fromIso, toIso);
   }
 
   async createEvent(

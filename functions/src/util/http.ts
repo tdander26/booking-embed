@@ -1,19 +1,23 @@
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from 'firebase-functions';
 
-/** Throwable error that maps to an HTTP status + safe client message. */
+/** Throwable error that maps to an HTTP status + safe client message.
+ * `details` is an optional safe-to-expose object (e.g. per-field validation
+ * errors) merged into the JSON response. */
 export class ApiError extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string, message: string) {
+  details?: Record<string, unknown>;
+  constructor(status: number, code: string, message: string, details?: Record<string, unknown>) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
-export const badRequest = (msg: string, code = 'bad_request') =>
-  new ApiError(400, code, msg);
+export const badRequest = (msg: string, code = 'bad_request', details?: Record<string, unknown>) =>
+  new ApiError(400, code, msg, details);
 export const notFound = (msg = 'Not found', code = 'not_found') =>
   new ApiError(404, code, msg);
 export const conflict = (msg: string, code = 'conflict') =>
@@ -42,7 +46,9 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   if (err instanceof ApiError) {
-    res.status(err.status).json({ error: err.code, message: err.message });
+    const body: Record<string, unknown> = { error: err.code, message: err.message };
+    if (err.details && typeof err.details === 'object') Object.assign(body, err.details);
+    res.status(err.status).json(body);
     return;
   }
   // Log internals server-side only; never leak details (or PII) to the client.

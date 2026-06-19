@@ -2,10 +2,13 @@ import { DateTime } from 'luxon';
 import { logger } from 'firebase-functions';
 import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
 import { db, COL } from '../firebase';
-import { BASE_GRID_MINUTES } from '../config';
+import { BASE_GRID_MINUTES, isEmulator } from '../config';
 import { coveredCells } from './slots';
 import { computeAvailability, loadEventTypeById, loadSchedule } from './availability';
-import { getCalendarProvider } from '../calendar/provider';
+import { getMemberCalendar, getConnectionProvider } from '../calendar/provider';
+import { MockCalendarProvider, type CalendarProvider } from '../calendar/provider';
+import { loadMember } from '../members';
+import { validateAnswers, formatAnswersText } from './answers';
 import { randomToken, sanitizeForDocId } from '../util/ids';
 import { badRequest, conflict, notFound, serverError } from '../util/http';
 import {
@@ -15,18 +18,55 @@ import {
 import { loadBranding } from '../branding';
 import type {
   Booking,
+  BookingAnswer,
   BookingConfirmation,
   CreateBookingRequest,
+  EventType,
+  Member,
 } from '../types';
 
-function lockId(calendarId: string, cell: number): string {
-  return `${sanitizeForDocId(calendarId)}_${cell}`;
+const DEFAULT_MEMBER_ID = 'mbr_todd'; // legacy single-provider fallback
+
+/** Locks/counters are partitioned by MEMBER (the true concurrency domain), not
+ * by calendar id: two providers can hold the same wall-clock cell, while two
+ * bookings for the SAME member that overlap still collide on a shared cell. */
+function lockId(memberId: string, cell: number): string {
+  return `${sanitizeForDocId(memberId)}_${cell}`;
 }
 
 function canonicalIso(input: string): { ms: number; iso: string } {
   const ms = DateTime.fromISO(input, { setZone: true }).toMillis();
   if (Number.isNaN(ms)) throw badRequest('Invalid start time', 'bad_time');
   return { ms, iso: new Date(ms).toISOString() };
+}
+
+/**
+ * Resolve the provider this booking is for. When the event type lists members,
+ * `req.memberId` is required and must be one of them; otherwise we fall back to
+ * the owner (`mbr_todd`) so legacy single-provider types keep working.
+ * Returns the resolved id plus the loaded member doc (may be null in legacy mode
+ * when the members collection hasn't been seeded yet).
+ */
+async function resolveMember(
+  eventType: EventType,
+  req: CreateBookingRequest,
+): Promise<{ memberId: string; member: Member | null }> {
+  const offered = eventType.memberIds ?? [];
+  if (offered.length > 0) {
+    const chosen = req.memberId;
+    if (!chosen || !offered.includes(chosen)) {
+      throw badRequest('Please choose a provider.', 'member_required');
+    }
+    const member = await loadMember(chosen);
+    if (!member || !member.active) {
+      throw notFound('Provider unavailable', 'no_member');
+    }
+    return { memberId: chosen, member };
+  }
+  // Legacy single-provider: honor an explicit memberId if given, else the owner.
+  const memberId = req.memberId || DEFAULT_MEMBER_ID;
+  const member = await loadMember(memberId);
+  return { memberId, member };
 }
 
 /** Reminder schedule: minutes-before values whose fire instant is still future. */
@@ -52,16 +92,25 @@ export async function createBooking(
     throw notFound('Event type not found', 'no_event_type');
   }
 
+  // Resolve the provider (or legacy owner). Member-aware from here on.
+  const { memberId, member } = await resolveMember(eventType, req);
+  const memberName = member?.name;
+
+  // Validate custom intake answers against the CURRENT questions BEFORE the
+  // transaction. Throws badRequest('invalid_answers', { fields }) on failure.
+  const answers: BookingAnswer[] = validateAnswers(eventType, req.answers);
+
   const { ms: startMs, iso: startIso } = canonicalIso(req.startUtc);
   const endMs = startMs + eventType.durationMinutes * 60_000;
   const endIso = new Date(endMs).toISOString();
 
   // Authoritative re-validation: the requested instant must be an offered slot
-  // RIGHT NOW (re-checks availability windows, buffers, notice, calendar busy,
-  // and existing bookings). The client's view may be stale.
+  // RIGHT NOW for THIS member (re-checks availability windows, buffers, notice,
+  // calendar busy, and existing bookings). The client's view may be stale.
   const start = DateTime.fromMillis(startMs, { zone: 'utc' });
   const avail = await computeAvailability({
     eventType,
+    memberId,
     fromDate: start.minus({ days: 1 }).toFormat('yyyy-MM-dd'),
     toDate: start.plus({ days: 1 }).toFormat('yyyy-MM-dd'),
     inviteeTz: req.timezone,
@@ -72,27 +121,35 @@ export async function createBooking(
     throw conflict('That time is no longer available.', 'slot_unavailable');
   }
 
-  const { provider, calendarId } = await getCalendarProvider();
+  // Per-member write target: a real Google calendar when this member has a write
+  // connection, otherwise the mock provider (same as today's not-connected path).
+  const rc = await getMemberCalendar(memberId);
+  const writeProvider: CalendarProvider = rc.write?.provider ?? new MockCalendarProvider();
+  const writeCalendarId = rc.write?.calendarId ?? 'primary';
+  const writeConnectionId = rc.write?.connectionId;
 
-  // Per-day cap is enforced TRANSACTIONALLY via a counter doc. The read-path
-  // filter in computeAvailability is only a UI pre-check and races under load.
+  // Per-day cap is enforced TRANSACTIONALLY via a counter doc keyed by MEMBER.
+  // The read-path filter in computeAvailability is only a UI pre-check.
   let dayCounterRef: DocumentReference | undefined;
   const dayCap = eventType.dailyBookingLimit;
   if (dayCap != null) {
-    const schedule = await loadSchedule(eventType.availabilityScheduleId);
-    const dayKey = DateTime.fromMillis(startMs, { zone: schedule.timezone }).toFormat(
-      'yyyy-MM-dd',
-    );
+    // Count the day in the MEMBER's own schedule timezone (falls back to the
+    // legacy event-type schedule when the member has no default schedule).
+    const scheduleId = member?.defaultScheduleId || eventType.availabilityScheduleId;
+    const schedule = scheduleId ? await loadSchedule(scheduleId) : null;
+    const zone = schedule?.timezone ?? 'utc';
+    const dayKey = DateTime.fromMillis(startMs, { zone }).toFormat('yyyy-MM-dd');
     dayCounterRef = db
       .collection(COL.dayCounters)
-      .doc(`${sanitizeForDocId(calendarId)}_${dayKey}`);
+      .doc(`${sanitizeForDocId(memberId)}_${dayKey}`);
   }
 
   // --- Atomic reservation + booking creation -----------------------------
   // Lock every grid cell the booking covers, so any overlapping concurrent
-  // booking (even a different start time) collides on a shared cell and loses.
+  // booking FOR THE SAME MEMBER (even a different start time) collides on a
+  // shared cell and loses. Different members are in disjoint key partitions.
   const cells = coveredCells(startMs, endMs, BASE_GRID_MINUTES);
-  const lockIds = cells.map((c) => lockId(calendarId, c));
+  const lockIds = cells.map((c) => lockId(memberId, c));
   const bookingRef = db.collection(COL.bookings).doc();
   const bookingId = bookingRef.id;
   const cancelToken = randomToken();
@@ -103,10 +160,14 @@ export async function createBooking(
     nowMs,
   );
 
+  const hasQuestions = (eventType.questions?.length ?? 0) > 0;
+
   const booking: Booking = {
     id: bookingId,
     eventTypeId: eventType.id,
     eventTypeName: eventType.name,
+    memberId,
+    memberName,
     startUtc: startIso,
     endUtc: endIso,
     durationMinutes: eventType.durationMinutes,
@@ -114,11 +175,17 @@ export async function createBooking(
       name: req.name.trim(),
       email: req.email.trim().toLowerCase(),
       phone: req.phone?.trim() || undefined,
-      notes: req.notes?.trim() || undefined,
+      // The legacy free-text notes box only applies when there are no custom
+      // questions; when questions exist, answers replace it.
+      notes: hasQuestions ? undefined : req.notes?.trim() || undefined,
       timezone: req.timezone,
     },
+    answers: answers.length > 0 ? answers : undefined,
     location: { type: eventType.location.type, details: eventType.location.details },
     status: 'confirmed',
+    calendarRef: writeConnectionId
+      ? { connectionId: writeConnectionId, calendarId: writeCalendarId }
+      : undefined,
     lockIds,
     dayCounterId: dayCounterRef?.id,
     cancelToken,
@@ -151,6 +218,7 @@ export async function createBooking(
       lockRefs.forEach((ref) =>
         tx.create(ref, {
           bookingId,
+          memberId,
           eventTypeId: eventType.id,
           startUtc: startIso,
           endUtc: endIso,
@@ -179,13 +247,14 @@ export async function createBooking(
 
   // --- Side effects AFTER the transaction commits ------------------------
   const branding = await loadBranding();
+  const host = memberName ?? branding.displayName;
   const withMeet = eventType.location.type === 'google_meet';
   let meetUrl: string | undefined;
   let googleEventId: string | undefined;
   try {
-    const created = await provider.createEvent(calendarId, {
+    const created = await writeProvider.createEvent(writeCalendarId, {
       summary: `${eventType.name} — ${booking.invitee.name}`,
-      description: buildEventDescription(booking, branding.displayName),
+      description: buildEventDescription(booking, host),
       startUtcIso: startIso,
       endUtcIso: endIso,
       attendeeEmail: booking.invitee.email,
@@ -207,9 +276,19 @@ export async function createBooking(
   }
 
   const location = { ...booking.location, meetUrl };
-  await bookingRef.update({ googleEventId: googleEventId ?? null, location });
+  // If we fell back to the mock provider in PRODUCTION (this member has no
+  // connected/writable calendar), flag it so staff are alerted the event never
+  // reached a real calendar. The mock returns no meetUrl, so no dead Meet link
+  // is ever emailed. (Emulator demos are intentionally not flagged.)
+  const googleSyncError = !rc.write && !isEmulator() ? 'no_write_calendar' : undefined;
+  await bookingRef.update({
+    googleEventId: googleEventId ?? null,
+    location,
+    googleSyncError: googleSyncError ?? null,
+  });
   booking.googleEventId = googleEventId;
   booking.location = location;
+  booking.googleSyncError = googleSyncError;
 
   // Confirmation email (idempotent; failure must not fail the booking).
   try {
@@ -229,11 +308,14 @@ export async function createBooking(
     eventTypeName: eventType.name,
     location,
     displayName: branding.displayName,
+    providerName: memberName ?? branding.displayName,
   };
   return { booking, confirmation };
 }
 
-/** Delete the booking doc + its slot locks and free its day-cap slot (rollback). */
+/** Delete the booking doc + its slot locks and free its day-cap slot (rollback).
+ * Uses the booking's STORED lockIds/dayCounterId so legacy (calendar-keyed) and
+ * new (member-keyed) bookings both release the correct docs. */
 async function releaseBooking(booking: Booking): Promise<void> {
   const batch = db.batch();
   batch.delete(db.collection(COL.bookings).doc(booking.id));
@@ -272,7 +354,22 @@ export async function cancelBooking(
   const booking = await loadBookingForManage(bookingId, token);
   if (booking.status === 'cancelled') return booking; // idempotent
 
-  const { provider, calendarId } = await getCalendarProvider();
+  // Delete the event with the SAME account token + calendar it was created on.
+  // Prefer the booking's snapshotted calendarRef (connection + calendar) so a
+  // later write-target reassignment to another account can't orphan the event;
+  // fall back to the member's current write target for legacy bookings.
+  const memberId = booking.memberId || DEFAULT_MEMBER_ID;
+  let provider: CalendarProvider;
+  let calendarId: string;
+  if (booking.calendarRef?.connectionId) {
+    const conn = await getConnectionProvider(memberId, booking.calendarRef.connectionId);
+    provider = conn.provider;
+    calendarId = booking.calendarRef.calendarId;
+  } else {
+    const rc = await getMemberCalendar(memberId);
+    provider = rc.write?.provider ?? new MockCalendarProvider();
+    calendarId = rc.write?.calendarId ?? 'primary';
+  }
 
   // Free the slot + mark cancelled.
   const batch = db.batch();
@@ -295,8 +392,8 @@ export async function cancelBooking(
   }
   await batch.commit();
 
-  // Remove the calendar event (best-effort).
-  if (booking.googleEventId) {
+  // Remove the calendar event (best-effort). Skip mock ids (never on a real cal).
+  if (booking.googleEventId && !booking.googleEventId.startsWith('mock_')) {
     await provider
       .deleteEvent(calendarId, booking.googleEventId)
       .catch((err) => logger.error('Calendar delete failed', { bookingId }));
@@ -310,8 +407,15 @@ export async function cancelBooking(
   return booking;
 }
 
+/** Google Calendar event description: host line, custom intake answers, then the
+ * legacy notes/phone lines. Answer labels are snapshotted on the booking, so a
+ * later question edit/delete never loses a historical answer. */
 function buildEventDescription(booking: Booking, host: string): string {
   const lines = [`Booked with ${host}.`];
+  if (booking.answers && booking.answers.length > 0) {
+    const block = formatAnswersText(booking.answers);
+    if (block) lines.push('', block);
+  }
   if (booking.invitee.notes) lines.push('', `Notes: ${booking.invitee.notes}`);
   if (booking.invitee.phone) lines.push(`Phone: ${booking.invitee.phone}`);
   return lines.join('\n');

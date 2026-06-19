@@ -57,6 +57,8 @@ const baseET = {
   color: '#C9A84C',
   location: { type: 'google_meet' },
   availabilityScheduleId: 'sched_default',
+  memberIds: ['mbr_todd'], // v2: offered by the owner member
+  questions: [], // v2: no custom intake questions by default
   bufferBeforeMinutes: 0,
   bufferAfterMinutes: 10,
   minNoticeMinutes: 120,
@@ -82,6 +84,22 @@ await put('availabilitySchedules/sched_default', {
   timezone: TZ,
   weekly: { 1: weekday, 2: weekday, 3: weekday, 4: weekday, 5: weekday },
   overrides: [],
+  memberId: 'mbr_todd', // v2: owned by the owner member
+  createdAt: now,
+  updatedAt: now,
+});
+// v2: the owner member. Fresh projects start single-provider; add more members
+// via the admin UI. (The live project gets this via migrate-members.mjs.)
+await put('members/mbr_todd', {
+  id: 'mbr_todd',
+  name: 'Dr. Todd Anderson',
+  title: '',
+  email: 'doc@drtoddanderson.com',
+  active: true,
+  featured: false,
+  sortOrder: 1,
+  isAdmin: true,
+  defaultScheduleId: 'sched_default',
   createdAt: now,
   updatedAt: now,
 });

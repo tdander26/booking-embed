@@ -5,8 +5,11 @@ import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } from '../
 import {
   makeOAuthClient,
   saveGoogleTokens,
+  fetchAccountEmail,
+  listCalendars,
   GOOGLE_SCOPES,
 } from '../google/oauth';
+import { upsertConnection } from '../members';
 import { wrap } from '../util/http';
 
 export const oauthRouter = Router();
@@ -55,6 +58,10 @@ oauthRouter.get(
       redirectBack('expired');
       return;
     }
+    // v2: a per-member connect flow stamps the member id into the state doc. When
+    // present we write a multi-account connection; when absent we keep the legacy
+    // single-token path so the live single-provider site never breaks mid-rollout.
+    const memberId = snap.data()?.memberId as string | undefined;
 
     const clientId = safeValue(GOOGLE_CLIENT_ID);
     const clientSecret = safeValue(GOOGLE_CLIENT_SECRET);
@@ -71,13 +78,33 @@ oauthRouter.get(
         redirectBack('norefresh');
         return;
       }
-      await saveGoogleTokens({
+
+      if (!memberId) {
+        // LEGACY path unchanged — keeps the live single-provider site working.
+        await saveGoogleTokens({
+          refreshToken: tokens.refresh_token,
+          calendarId: 'primary',
+          scope: tokens.scope ?? GOOGLE_SCOPES.join(' '),
+          updatedAt: new Date().toISOString(),
+        });
+        redirectBack('connected');
+        return;
+      }
+
+      // NEW per-member multi-account path. Bind a fresh OAuth client to the
+      // account's refresh token, discover its identity + calendar list, then
+      // upsert the connection under members/{memberId}/connections/{connId}.
+      const oauth = makeOAuthClient(clientId, clientSecret, resolveRedirectUri(req));
+      oauth.setCredentials({ refresh_token: tokens.refresh_token });
+      const accountEmail = await fetchAccountEmail(oauth);
+      const calendars = await listCalendars(oauth);
+      await upsertConnection(memberId, {
+        accountEmail,
         refreshToken: tokens.refresh_token,
-        calendarId: 'primary',
         scope: tokens.scope ?? GOOGLE_SCOPES.join(' '),
-        updatedAt: new Date().toISOString(),
+        calendars,
       });
-      redirectBack('connected');
+      redirectBack(`connected&member=${encodeURIComponent(memberId)}`);
     } catch (err) {
       logger.error('Google OAuth callback failed');
       redirectBack('error');

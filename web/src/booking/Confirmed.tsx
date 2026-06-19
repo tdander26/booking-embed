@@ -24,8 +24,10 @@ export function Confirmed({ confirmation }: { confirmation: BookingConfirmation 
     postScheduled(confirmation.bookingId, confirmation.startUtc);
   }, [confirmation.bookingId, confirmation.startUtc]);
 
+  const hostName = confirmation.providerName ?? confirmation.displayName;
+
   const calEvent = {
-    title: `${confirmation.eventTypeName} with ${confirmation.displayName}`,
+    title: `${confirmation.eventTypeName} with ${hostName}`,
     startUtc: confirmation.startUtc,
     endUtc: confirmation.endUtc,
     location: confirmation.location.meetUrl ?? confirmation.location.details,
@@ -40,7 +42,7 @@ export function Confirmed({ confirmation }: { confirmation: BookingConfirmation 
       <div className="animate-pop mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full text-brand-fg shadow-gold-glow [background:linear-gradient(135deg,var(--brand-light),var(--brand-dark))]">
         <Check size={30} strokeWidth={3} />
       </div>
-      <h2 className="font-display text-2xl font-semibold text-ink">You're booked</h2>
+      <h2 className="font-display text-2xl font-semibold text-ink">You're booked with {hostName}</h2>
       <p className="mt-1.5 text-sm text-muted">A confirmation is on its way to your inbox.</p>
 
       <div className="mx-auto mt-6 max-w-sm rounded-xl border border-hair-soft bg-surface-2 p-4 text-left text-sm">

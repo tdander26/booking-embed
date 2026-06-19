@@ -1,23 +1,38 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateTime } from 'luxon';
-import { ChevronLeft, ChevronRight, Clock, Globe } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, Globe, CalendarX, ArrowRight } from 'lucide-react';
 import * as api from '../api/client';
-import type { PublicEventType, AvailabilityResponse } from '../api/types';
-import { guessTimezone, timezoneOptions, fmtTime, zoneAbbrev } from '../lib/time';
-import { Spinner, Banner } from '../components/ui';
+import type { PublicEventType, PublicProvider, AvailabilityResponse } from '../api/types';
+import { timezoneOptions, fmtTime, zoneAbbrev } from '../lib/time';
+import { Spinner, Banner, Button } from '../components/ui';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function Scheduler({
   eventType,
-  defaultTz,
+  provider,
+  tz,
+  onTzChange,
   onPick,
+  onSwitchProvider,
+  onBackToTypes,
+  exhausted,
+  onExhausted,
 }: {
   eventType: PublicEventType;
-  defaultTz?: string;
+  provider: PublicProvider | null;
+  /** Lifted to BookingApp so it persists across provider switches. */
+  tz: string;
+  onTzChange: (tz: string) => void;
   onPick: (iso: string, tz: string) => void;
+  /** When this provider has no openings, jump to another provider. */
+  onSwitchProvider?: (p: PublicProvider) => void;
+  /** Fallback escape hatch when there's nowhere else to switch. */
+  onBackToTypes?: () => void;
+  /** Provider ids already found fully-booked (prevents A→B→A ping-pong). */
+  exhausted?: Set<string>;
+  onExhausted?: (memberId: string) => void;
 }) {
-  const [tz, setTz] = useState<string>(guessTimezone() || defaultTz || 'UTC');
   const [monthAnchor, setMonthAnchor] = useState<DateTime>(
     DateTime.now().setZone(tz).startOf('month'),
   );
@@ -25,6 +40,19 @@ export function Scheduler({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  // Tracks whether we have *ever* seen a slot for this provider across month
+  // navigation, so we only show the no-dead-end panel when truly empty.
+  const everHadSlots = useRef(false);
+
+  // On provider change: reset the "ever had slots" memory AND jump the calendar
+  // back to the current month, so a switched-in provider is evaluated from their
+  // earliest month instead of inheriting the previous provider's far-future page.
+  useEffect(() => {
+    everHadSlots.current = false;
+    setSelectedDay(null);
+    setMonthAnchor(DateTime.now().setZone(tz).startOf('month'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider?.id]);
 
   useEffect(() => {
     let alive = true;
@@ -33,18 +61,20 @@ export function Scheduler({
     const from = monthAnchor.startOf('month').toFormat('yyyy-MM-dd');
     const to = monthAnchor.endOf('month').toFormat('yyyy-MM-dd');
     api
-      .getAvailability({ eventTypeId: eventType.id, from, to, tz })
+      .getAvailability({ eventTypeId: eventType.id, memberId: provider?.id, from, to, tz })
       .then((res) => {
         if (!alive) return;
         setAvail(res);
-        setSelectedDay(res.days.find((d) => d.slots.length > 0)?.date ?? null);
+        const firstWithSlots = res.days.find((d) => d.slots.length > 0)?.date ?? null;
+        if (firstWithSlots) everHadSlots.current = true;
+        setSelectedDay(firstWithSlots);
       })
       .catch((e) => alive && setErr((e as Error).message))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [eventType.id, tz, monthAnchor]);
+  }, [eventType.id, provider?.id, tz, monthAnchor]);
 
   const byDate = useMemo(() => {
     const m = new Map<string, string[]>();
@@ -69,14 +99,65 @@ export function Scheduler({
 
   const daySlots = selectedDay ? (byDate.get(selectedDay) ?? []) : [];
 
+  // No-dead-end: we've scanned to the end of the horizon, this month has no
+  // slots, and we never saw any slots for this provider in the whole window.
+  const monthHasSlots = (avail?.days ?? []).some((d) => d.slots.length > 0);
+  const showNoAvail =
+    !loading &&
+    !err &&
+    provider != null &&
+    !monthHasSlots &&
+    !everHadSlots.current &&
+    !canNext; // reached the end of the bookable window
+
+  // Only offer to switch to a provider we haven't ALREADY shown as full — else
+  // two full providers would ping-pong A→B→A forever.
+  const otherProviders = eventType.providers.filter((p) => p.id !== provider?.id);
+  const switchTarget = otherProviders.find((p) => !(exhausted?.has(p.id) ?? false));
+
+  // Remember this provider is full so the parent (and the switch logic) skip it.
+  useEffect(() => {
+    if (showNoAvail && provider) onExhausted?.(provider.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNoAvail, provider?.id]);
+
+  if (showNoAvail) {
+    return (
+      <div>
+        <SchedulerHeader eventType={eventType} provider={provider} />
+        <div className="mt-4 flex flex-col items-center gap-4 rounded-xl border border-hair-soft bg-surface-2 p-8 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.04] text-faint">
+            <CalendarX size={22} />
+          </div>
+          <div>
+            <div className="font-display text-base font-semibold text-ink">
+              {provider?.name} has no openings in this window.
+            </div>
+            <p className="mt-1 text-sm text-muted">
+              {switchTarget
+                ? `${switchTarget.name} may have earlier availability.`
+                : 'Please check back soon for new times.'}
+            </p>
+          </div>
+          {switchTarget && onSwitchProvider ? (
+            <Button type="button" onClick={() => onSwitchProvider(switchTarget)}>
+              See {switchTarget.name}'s availability <ArrowRight size={16} />
+            </Button>
+          ) : (
+            onBackToTypes && (
+              <Button variant="outline" type="button" onClick={onBackToTypes}>
+                Back to meeting types
+              </Button>
+            )
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="mb-1 flex items-center gap-2">
-        <Clock size={15} className="text-brand" />
-        <h2 className="font-display text-xl font-semibold text-ink">{eventType.name}</h2>
-        <span className="text-sm text-faint">· {eventType.durationMinutes} min</span>
-      </div>
-      {eventType.description && <p className="mb-5 text-sm text-muted">{eventType.description}</p>}
+      <SchedulerHeader eventType={eventType} provider={provider} />
 
       {err && <Banner kind="error">{err}</Banner>}
 
@@ -154,7 +235,7 @@ export function Scheduler({
             <Globe size={14} className="text-brand" />
             <select
               value={tz}
-              onChange={(e) => setTz(e.target.value)}
+              onChange={(e) => onTzChange(e.target.value)}
               className="max-w-full rounded-lg border border-hair-soft bg-surface-2 px-2 py-1.5 text-xs text-ink focus:border-brand/60 focus:outline-none"
             >
               {timezoneOptions().map((z) => (
@@ -193,5 +274,29 @@ export function Scheduler({
         </div>
       </div>
     </div>
+  );
+}
+
+function SchedulerHeader({
+  eventType,
+  provider,
+}: {
+  eventType: PublicEventType;
+  provider: PublicProvider | null;
+}) {
+  return (
+    <>
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <Clock size={15} className="text-brand" />
+        <h2 className="font-display text-xl font-semibold text-ink">{eventType.name}</h2>
+        <span className="text-sm text-faint">· {eventType.durationMinutes} min</span>
+        {provider && (
+          <span className="text-sm text-muted">
+            · with <span className="text-ink">{provider.name}</span>
+          </span>
+        )}
+      </div>
+      {eventType.description && <p className="mb-5 text-sm text-muted">{eventType.description}</p>}
+    </>
   );
 }

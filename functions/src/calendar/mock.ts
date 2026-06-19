@@ -8,8 +8,9 @@ import type {
 
 /**
  * Used in the emulator and before a real Google calendar is connected. Reports
- * no external busy times (the calendar is wide open) and fabricates plausible
- * event ids / Meet links so the booking flow is fully demoable offline.
+ * no external busy times (the calendar is wide open) and returns a `mock_` event
+ * id with NO meetUrl — so we never email a dead "Join Google Meet" link. When a
+ * real calendar is connected the live Meet link is created instead.
  */
 export class MockCalendarProvider implements CalendarProvider {
   async getBusy(
@@ -22,14 +23,9 @@ export class MockCalendarProvider implements CalendarProvider {
 
   async createEvent(
     _calendarId: string,
-    input: CreateEventInput,
+    _input: CreateEventInput,
   ): Promise<CreatedEvent> {
-    return {
-      eventId: `mock_${randomUUID()}`,
-      meetUrl: input.withMeet
-        ? 'https://meet.google.com/lookup/mock-demo-link'
-        : undefined,
-    };
+    return { eventId: `mock_${randomUUID()}` };
   }
 
   async deleteEvent(_calendarId: string, _eventId: string): Promise<void> {

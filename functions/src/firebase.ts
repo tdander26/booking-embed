@@ -15,6 +15,7 @@ export const auth = getAuth();
 // Collection name constants — single source of truth.
 export const COL = {
   branding: 'branding',
+  members: 'members',
   eventTypes: 'eventTypes',
   schedules: 'availabilitySchedules',
   bookings: 'bookings',
@@ -24,6 +25,9 @@ export const COL = {
   private: 'private',
   oauthStates: 'oauthStates',
 } as const;
+
+/** Subcollection under members/{memberId} holding server-only Google connections. */
+export const CONN_SUB = 'connections' as const;
 
 /** The single branding doc id and the single google-tokens doc id. */
 export const BRANDING_DOC = 'public';

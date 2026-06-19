@@ -1,87 +1,34 @@
 import { useEffect, useState } from 'react';
-import { Check, Link2, Unlink } from 'lucide-react';
+import { Users } from 'lucide-react';
 import * as api from '../api/client';
-import type { PublicBranding, GoogleStatus } from '../api/types';
+import type { PublicBranding } from '../api/types';
 import { timezoneOptions } from '../lib/time';
 import { Spinner, Banner, Button, Card, Field, inputClass } from '../components/ui';
 
 export function SettingsTab() {
   return (
     <div className="space-y-6">
-      <GooglePanel />
+      <CalendarPointerCard />
       <BrandingPanel />
     </div>
   );
 }
 
-function GooglePanel() {
-  const [status, setStatus] = useState<GoogleStatus | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = () =>
-    api.adminGoogleStatus().then(setStatus).catch((e) => setErr((e as Error).message));
-  useEffect(() => {
-    load();
-  }, []);
-
-  const connect = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const { url } = await api.adminGoogleAuthUrl();
-      window.location.href = url;
-    } catch (e) {
-      setErr((e as Error).message);
-      setBusy(false);
-    }
-  };
-  const disconnect = async () => {
-    if (!confirm('Disconnect Google Calendar? New bookings will not sync.')) return;
-    await api.adminGoogleDisconnect();
-    load();
-  };
-
-  const flash = new URLSearchParams(window.location.search).get('google');
-
+function CalendarPointerCard() {
   return (
     <Card className="p-5">
-      <h2 className="mb-1 text-base font-semibold text-ink">Google Calendar</h2>
-      <p className="mb-3 text-sm text-muted">
-        Connect your calendar so bookings check your real availability and create events with a
-        Meet link.
+      <div className="mb-1 flex items-center gap-2">
+        <Users size={18} className="text-brand" />
+        <h2 className="text-base font-semibold text-ink">Google Calendar</h2>
+      </div>
+      <p className="text-sm text-muted">
+        Calendar connections are now per provider. Manage each provider's Google accounts and
+        their busy / write calendars under the{' '}
+        <span className="font-medium text-ink">Providers</span> tab.
       </p>
-      {flash === 'connected' && <Banner kind="success">Google Calendar connected.</Banner>}
-      {flash === 'norefresh' && (
-        <Banner kind="error">
-          Google didn't return a refresh token. Remove the app from your Google account's
-          third-party access, then reconnect.
-        </Banner>
-      )}
-      {(flash === 'error' || flash === 'expired' || flash === 'unconfigured') && (
-        <Banner kind="error">Connection failed ({flash}). Please try again.</Banner>
-      )}
-      {err && <Banner kind="error">{err}</Banner>}
-
-      {!status ? (
-        <Spinner />
-      ) : status.connected ? (
-        <div className="mt-3 flex items-center gap-3">
-          <span className="inline-flex items-center gap-2 rounded-lg bg-brand/10 px-3 py-2 text-sm text-brand-light">
-            <Check size={16} /> Connected{status.email ? ` (${status.email})` : ''}
-          </span>
-          <Button variant="outline" onClick={disconnect}>
-            <Unlink size={16} /> Disconnect
-          </Button>
-        </div>
-      ) : (
-        <Button onClick={connect} disabled={busy}>
-          <Link2 size={16} /> {busy ? 'Redirecting…' : 'Connect Google Calendar'}
-        </Button>
-      )}
-      <p className="mt-3 text-xs text-faint">
-        Not connected? Bookings still work — they just won't check or write to a real calendar
-        (a mock calendar is used).
+      <p className="mt-2 text-xs text-faint">
+        Each provider connects their own Google account and picks which calendars block their
+        availability and where confirmed events are written.
       </p>
     </Card>
   );

@@ -27,6 +27,18 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Providers ("members"). The app reads these only through the auth-gated /api
+    // (which strips email), so direct client reads are admin-only. Writes admin.
+    match /members/{memberId} {
+      allow read, write: if isAdmin();
+
+      // Per-account Google connections hold refresh tokens — server-only, no
+      // client access of any kind (the Admin SDK in the api function bypasses).
+      match /connections/{connId} {
+        allow read, write: if false;
+      }
+    }
+
     // Availability schedules are consumed server-side by getAvailability (Admin
     // SDK). The client only needs them in the admin editor.
     match /availabilitySchedules/{id} {
