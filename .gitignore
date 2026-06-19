@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+*/node_modules/
+
+# builds
+web/dist/
+functions/lib/
+**/.vite/
+
+# firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+*-debug.log
+
+# secrets / local config
+.env
+.env.local
+*/.env
+*/.env.local
+*/.secret.local
+.runtimeconfig.json
+service-account*.json
+
+# misc
+.DS_Store
+*.log

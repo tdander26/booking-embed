@@ -1,0 +1,46 @@
+import { Resend } from 'resend';
+import { logger } from 'firebase-functions';
+import { RESEND_API_KEY, EMAIL_FROM, isEmulator } from '../config';
+
+function secret(): string {
+  try {
+    return RESEND_API_KEY.value();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Send one transactional email. In the emulator, or when no API key is set,
+ * logs instead of sending so the flow works offline. Returns the provider id
+ * (or null when not actually sent).
+ */
+export async function sendEmail(opts: {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+  idempotencyKey?: string;
+}): Promise<string | null> {
+  const key = secret();
+  if (isEmulator() || !key) {
+    logger.info('[email:dev] (not sent)', { to: opts.to, subject: opts.subject });
+    return null;
+  }
+  const resend = new Resend(key);
+  const { data, error } = await resend.emails.send(
+    {
+      from: EMAIL_FROM.value(),
+      to: [opts.to],
+      subject: opts.subject,
+      html: opts.html,
+      text: opts.text,
+    },
+    // Idempotency key goes in the SECOND options argument, not the payload.
+    opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined,
+  );
+  if (error) {
+    throw new Error(`Resend send failed: ${error.name} — ${error.message}`);
+  }
+  return data?.id ?? null;
+}

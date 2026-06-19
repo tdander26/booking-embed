@@ -1,0 +1,60 @@
+rules_version = '2';
+
+// Booking-embed Firestore security model.
+//
+// Principle: the PUBLIC booking flow never writes Firestore directly and never
+// reads anything sensitive. All mutations (bookings, slot locks) go through the
+// `api` Cloud Function using the Admin SDK, which bypasses these rules. The
+// admin UI authenticates as the owner (custom claim `admin == true`) and reads
+// /writes config directly.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Public, non-sensitive branding (clinic name, colors, avatar, welcome text).
+    match /branding/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Event types: anyone can read ACTIVE ones (the booking page needs them).
+    // Inactive/draft types and all writes are admin-only.
+    match /eventTypes/{id} {
+      allow read: if resource.data.active == true || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Availability schedules are consumed server-side by getAvailability (Admin
+    // SDK). The client only needs them in the admin editor.
+    match /availabilitySchedules/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // Bookings contain invitee PII (name, email, phone, notes).
+    // Never client-readable except by the owner; never client-writable
+    // (creation/cancellation flow through the api function).
+    match /bookings/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Atomic slot reservation locks — server-only.
+    match /slotLocks/{id} {
+      allow read, write: if false;
+    }
+
+    // Owner secrets (Google OAuth refresh token, etc.) — server-only, no client
+    // access of any kind.
+    match /private/{doc} {
+      allow read, write: if false;
+    }
+
+    // Deny everything else by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

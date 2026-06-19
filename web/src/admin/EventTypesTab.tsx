@@ -1,0 +1,358 @@
+import { useEffect, useState } from 'react';
+import { Plus, Trash2, X, ExternalLink } from 'lucide-react';
+import * as api from '../api/client';
+import type { EventType, AvailabilitySchedule, LocationType } from '../api/types';
+import { Spinner, Banner, Button, Card, Field, inputClass } from '../components/ui';
+
+function emptyEventType(scheduleId: string): EventType {
+  return {
+    id: '',
+    slug: '',
+    name: 'New event type',
+    description: '',
+    durationMinutes: 30,
+    active: true,
+    color: '#0f766e',
+    location: { type: 'google_meet' },
+    availabilityScheduleId: scheduleId,
+    bufferBeforeMinutes: 0,
+    bufferAfterMinutes: 0,
+    minNoticeMinutes: 120,
+    maxDaysInFuture: 60,
+    slotIntervalMinutes: 30,
+    dailyBookingLimit: null,
+    collectPhone: false,
+    remindersMinutesBefore: [1440, 60],
+    sortOrder: 0,
+  };
+}
+
+export function EventTypesTab() {
+  const [types, setTypes] = useState<EventType[] | null>(null);
+  const [schedules, setSchedules] = useState<AvailabilitySchedule[]>([]);
+  const [editing, setEditing] = useState<EventType | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () =>
+    Promise.all([api.adminGetEventTypes(), api.adminGetSchedules()])
+      .then(([t, s]) => {
+        setTypes(t.eventTypes);
+        setSchedules(s.schedules);
+      })
+      .catch((e) => setErr((e as Error).message));
+  useEffect(() => {
+    load();
+  }, []);
+
+  const save = async () => {
+    if (!editing) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      if (editing.id) await api.adminUpdateEventType(editing.id, editing);
+      else await api.adminCreateEventType(editing);
+      setEditing(null);
+      load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm('Delete this event type?')) return;
+    await api.adminDeleteEventType(id);
+    load();
+  };
+
+  if (err && !types) return <Banner kind="error">{err}</Banner>;
+  if (!types) return <Spinner />;
+
+  if (editing) {
+    return (
+      <EventTypeEditor
+        value={editing}
+        schedules={schedules}
+        onChange={setEditing}
+        onSave={save}
+        onCancel={() => setEditing(null)}
+        busy={busy}
+        err={err}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <Button
+          disabled={schedules.length === 0}
+          onClick={() => setEditing(emptyEventType(schedules[0]?.id ?? ''))}
+        >
+          <Plus size={16} /> New event type
+        </Button>
+      </div>
+      {schedules.length === 0 && (
+        <Banner kind="error">Create an availability schedule first (Availability tab).</Banner>
+      )}
+      {types.length === 0 ? (
+        <Card className="p-6 text-center text-sm text-faint">No event types yet.</Card>
+      ) : (
+        types.map((t) => (
+          <Card key={t.id} className="flex items-center gap-3 p-4">
+            <span className="h-8 w-1.5 rounded-full" style={{ background: t.color }} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-ink">{t.name}</span>
+                {!t.active && (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-muted">
+                    inactive
+                  </span>
+                )}
+              </div>
+              <div className="text-sm text-muted">
+                {t.durationMinutes} min · /{t.slug}
+              </div>
+            </div>
+            <a
+              href={`/?type=${encodeURIComponent(t.slug)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg p-2 text-faint hover:bg-white/5 hover:text-muted"
+              aria-label="Preview"
+            >
+              <ExternalLink size={16} />
+            </a>
+            <Button variant="outline" onClick={() => setEditing(t)}>
+              Edit
+            </Button>
+            <button
+              onClick={() => remove(t.id)}
+              className="rounded-lg p-2 text-faint hover:bg-red-500/10 hover:text-red-400"
+              aria-label="Delete"
+            >
+              <Trash2 size={18} />
+            </button>
+          </Card>
+        ))
+      )}
+    </div>
+  );
+}
+
+function num(v: string, fallback: number): number {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function EventTypeEditor({
+  value,
+  schedules,
+  onChange,
+  onSave,
+  onCancel,
+  busy,
+  err,
+}: {
+  value: EventType;
+  schedules: AvailabilitySchedule[];
+  onChange: (e: EventType) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  busy: boolean;
+  err: string | null;
+}) {
+  const set = (patch: Partial<EventType>) => onChange({ ...value, ...patch });
+  const [reminders, setReminders] = useState(value.remindersMinutesBefore.join(', '));
+
+  const commitReminders = () => {
+    const parsed = reminders
+      .split(',')
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => Number.isFinite(n) && n >= 0)
+      .slice(0, 5);
+    set({ remindersMinutesBefore: parsed });
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-base font-semibold text-ink">
+          {value.id ? 'Edit event type' : 'New event type'}
+        </h2>
+        <button onClick={onCancel} className="text-faint hover:text-muted">
+          <X size={20} />
+        </button>
+      </div>
+      {err && <Banner kind="error">{err}</Banner>}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Name">
+          <input className={inputClass} value={value.name} onChange={(e) => set({ name: e.target.value })} />
+        </Field>
+        <Field label="URL slug" hint="Leave blank to auto-generate from the name.">
+          <input className={inputClass} value={value.slug} onChange={(e) => set({ slug: e.target.value })} />
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="Description">
+            <input
+              className={inputClass}
+              value={value.description ?? ''}
+              onChange={(e) => set({ description: e.target.value })}
+            />
+          </Field>
+        </div>
+
+        <Field label="Duration (minutes)">
+          <input
+            type="number"
+            className={inputClass}
+            value={value.durationMinutes}
+            onChange={(e) => set({ durationMinutes: num(e.target.value, 30) })}
+          />
+        </Field>
+        <Field label="Slot interval (minutes)" hint="Spacing between offered start times.">
+          <input
+            type="number"
+            className={inputClass}
+            value={value.slotIntervalMinutes}
+            onChange={(e) => set({ slotIntervalMinutes: num(e.target.value, 30) })}
+          />
+        </Field>
+
+        <Field label="Location">
+          <select
+            className={inputClass}
+            value={value.location.type}
+            onChange={(e) =>
+              set({ location: { ...value.location, type: e.target.value as LocationType } })
+            }
+          >
+            <option value="google_meet">Google Meet</option>
+            <option value="phone">Phone</option>
+            <option value="in_person">In person</option>
+            <option value="custom">Custom</option>
+          </select>
+        </Field>
+        <Field label="Location details" hint="Phone number, address, or instructions.">
+          <input
+            className={inputClass}
+            value={value.location.details ?? ''}
+            onChange={(e) => set({ location: { ...value.location, details: e.target.value } })}
+          />
+        </Field>
+
+        <Field label="Availability schedule">
+          <select
+            className={inputClass}
+            value={value.availabilityScheduleId}
+            onChange={(e) => set({ availabilityScheduleId: e.target.value })}
+          >
+            {schedules.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Color">
+          <input
+            type="color"
+            className="h-11 w-full rounded-lg border border-hair-soft"
+            value={value.color}
+            onChange={(e) => set({ color: e.target.value })}
+          />
+        </Field>
+
+        <Field label="Buffer before (min)">
+          <input
+            type="number"
+            className={inputClass}
+            value={value.bufferBeforeMinutes}
+            onChange={(e) => set({ bufferBeforeMinutes: num(e.target.value, 0) })}
+          />
+        </Field>
+        <Field label="Buffer after (min)">
+          <input
+            type="number"
+            className={inputClass}
+            value={value.bufferAfterMinutes}
+            onChange={(e) => set({ bufferAfterMinutes: num(e.target.value, 0) })}
+          />
+        </Field>
+
+        <Field label="Minimum notice (min)" hint="Earliest a booking can be made.">
+          <input
+            type="number"
+            className={inputClass}
+            value={value.minNoticeMinutes}
+            onChange={(e) => set({ minNoticeMinutes: num(e.target.value, 0) })}
+          />
+        </Field>
+        <Field label="Bookable window (days)">
+          <input
+            type="number"
+            className={inputClass}
+            value={value.maxDaysInFuture}
+            onChange={(e) => set({ maxDaysInFuture: num(e.target.value, 60) })}
+          />
+        </Field>
+
+        <Field label="Reminders (minutes before)" hint="Comma-separated, e.g. 1440, 60">
+          <input
+            className={inputClass}
+            value={reminders}
+            onChange={(e) => setReminders(e.target.value)}
+            onBlur={commitReminders}
+          />
+        </Field>
+        <Field label="Daily booking limit" hint="Blank = unlimited.">
+          <input
+            type="number"
+            className={inputClass}
+            value={value.dailyBookingLimit ?? ''}
+            onChange={(e) =>
+              set({ dailyBookingLimit: e.target.value === '' ? null : num(e.target.value, 0) || null })
+            }
+          />
+        </Field>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-4">
+        <label className="flex items-center gap-2 text-sm text-muted">
+          <input
+            type="checkbox"
+            checked={value.active}
+            onChange={(e) => set({ active: e.target.checked })}
+          />
+          Active (visible on booking page)
+        </label>
+        <label className="flex items-center gap-2 text-sm text-muted">
+          <input
+            type="checkbox"
+            checked={value.collectPhone}
+            onChange={(e) => set({ collectPhone: e.target.checked })}
+          />
+          Collect phone number
+        </label>
+      </div>
+
+      <div className="mt-5 flex gap-2">
+        <Button
+          onClick={() => {
+            commitReminders();
+            onSave();
+          }}
+          disabled={busy}
+        >
+          {busy ? 'Saving…' : 'Save event type'}
+        </Button>
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </Card>
+  );
+}

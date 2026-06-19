@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Embed demo — booking-embed</title>
+    <style>
+      body {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        max-width: 820px;
+        margin: 0 auto;
+        padding: 32px 20px 96px;
+        color: #1f2937;
+        background: #ffffff;
+        line-height: 1.55;
+      }
+      h1 { font-size: 1.6rem; }
+      h2 { font-size: 1.15rem; margin-top: 2.5rem; }
+      code, pre {
+        background: #f3f4f6;
+        border-radius: 6px;
+        font-family: ui-monospace, monospace;
+        font-size: 0.85rem;
+      }
+      code { padding: 1px 5px; }
+      pre { padding: 14px; overflow-x: auto; }
+      .note { color: #6b7280; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Embed demo</h1>
+    <p class="note">
+      This page demonstrates the three ways to put the booking widget on any
+      website. Replace <code>data-url</code> with your deployed booking URL.
+    </p>
+
+    <h2>1. Inline embed</h2>
+    <p>Drops the booking page into a box on your site.</p>
+    <pre>&lt;div class="booking-inline" data-url="/?type=intro-call"&gt;&lt;/div&gt;
+&lt;script src="/embed.js"&gt;&lt;/script&gt;</pre>
+    <div class="booking-inline" data-url="/?type=intro-call" style="margin-top: 16px"></div>
+
+    <h2>2. Popup button (floating)</h2>
+    <p>A floating "Book a time" button in the corner of the page.</p>
+    <pre>&lt;script src="/embed.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  Booking.initPopupButton({ url: "/?type=intro-call", text: "Book a time" });
+&lt;/script&gt;</pre>
+
+    <h2>3. Popup from a link</h2>
+    <p>Open the widget in a modal when a link or button is clicked.</p>
+    <pre>&lt;a href="#" class="booking-popup" data-url="/?type=intro-call"&gt;Schedule now&lt;/a&gt;
+&lt;script src="/embed.js"&gt;&lt;/script&gt;</pre>
+    <p><a href="#" class="booking-popup" data-url="/?type=intro-call">Schedule now →</a></p>
+
+    <script src="/embed.js"></script>
+    <script>
+      // Floating popup button demo
+      window.addEventListener('load', function () {
+        if (window.Booking) {
+          window.Booking.initPopupButton({ url: '/?type=intro-call', text: 'Book a time' });
+        }
+      });
+    </script>
+  </body>
+</html>

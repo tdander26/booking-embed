@@ -1,0 +1,26 @@
+{
+  "name": "booking-embed",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted, Google-Calendar-synced booking page with an embeddable widget. A cheap Calendly alternative on Firebase.",
+  "scripts": {
+    "install:all": "npm install && npm --prefix functions install && npm --prefix web install",
+    "build:functions": "npm --prefix functions run build",
+    "build:web": "npm --prefix web run build",
+    "build": "npm run build:functions && npm run build:web",
+    "typecheck": "npm --prefix functions run typecheck && npm --prefix web run typecheck",
+    "dev:web": "npm --prefix web run dev",
+    "emulators": "firebase emulators:start --import=./.seed --export-on-exit=./.seed",
+    "seed": "node functions/scripts/seed.mjs",
+    "dev": "concurrently -n web,emulators -c cyan,magenta \"npm:dev:web\" \"npm:emulators\"",
+    "deploy": "npm run build && firebase deploy",
+    "deploy:hosting": "npm run build:web && firebase deploy --only hosting",
+    "deploy:functions": "npm run build:functions && firebase deploy --only functions",
+    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
+    "grant-admin": "node functions/scripts/grant-admin.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "firebase-tools": "^13.29.1"
+  }
+}
