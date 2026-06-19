@@ -179,7 +179,9 @@ export interface Booking {
   endUtc: string;
   durationMinutes: number;
   invitee: {
-    name: string;
+    name: string; // composed "First Last" (kept for display + back-compat)
+    firstName?: string;
+    lastName?: string;
     email: string;
     phone?: string;
     notes?: string;
@@ -269,7 +271,9 @@ export interface CreateBookingRequest {
   memberId?: string; // required iff the type has providers
   startUtc: string;
   timezone: string;
-  name: string;
+  name?: string; // legacy combined; server composes from first/last when absent
+  firstName?: string;
+  lastName?: string;
   email: string;
   phone?: string;
   notes?: string;

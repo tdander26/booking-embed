@@ -162,6 +162,13 @@ export async function createBooking(
 
   const hasQuestions = (eventType.questions?.length ?? 0) > 0;
 
+  // Compose the display name from first/last (new flow) or the legacy combined.
+  const firstName = req.firstName?.trim() || undefined;
+  const lastName = req.lastName?.trim() || undefined;
+  const fullName =
+    req.name?.trim() || [firstName, lastName].filter(Boolean).join(' ').trim();
+  if (!fullName) throw badRequest('Please enter your name.', 'name_required');
+
   const booking: Booking = {
     id: bookingId,
     eventTypeId: eventType.id,
@@ -172,7 +179,9 @@ export async function createBooking(
     endUtc: endIso,
     durationMinutes: eventType.durationMinutes,
     invitee: {
-      name: req.name.trim(),
+      name: fullName,
+      firstName,
+      lastName,
       email: req.email.trim().toLowerCase(),
       phone: req.phone?.trim() || undefined,
       // The legacy free-text notes box only applies when there are no custom
@@ -411,12 +420,17 @@ export async function cancelBooking(
  * legacy notes/phone lines. Answer labels are snapshotted on the booking, so a
  * later question edit/delete never loses a historical answer. */
 function buildEventDescription(booking: Booking, host: string): string {
-  const lines = [`Booked with ${host}.`];
+  const lines = [
+    `Booked with ${host}.`,
+    '',
+    `Name: ${booking.invitee.name}`,
+    `Email: ${booking.invitee.email}`,
+  ];
+  if (booking.invitee.phone) lines.push(`Phone: ${booking.invitee.phone}`);
   if (booking.answers && booking.answers.length > 0) {
     const block = formatAnswersText(booking.answers);
     if (block) lines.push('', block);
   }
   if (booking.invitee.notes) lines.push('', `Notes: ${booking.invitee.notes}`);
-  if (booking.invitee.phone) lines.push(`Phone: ${booking.invitee.phone}`);
   return lines.join('\n');
 }

@@ -264,18 +264,26 @@ const answerValueSchema = z.union([
   z.boolean(),
 ]);
 
-const bookingSchema = z.object({
-  eventTypeId: z.string().min(1).max(200),
-  memberId: z.string().min(1).max(200).optional(),
-  startUtc: z.string().min(10).max(40),
-  timezone: z.string().min(1).max(64),
-  name: z.string().trim().min(1).max(120),
-  email: z.string().trim().email().max(200),
-  phone: z.string().trim().max(40).optional(),
-  notes: z.string().trim().max(2000).optional(),
-  answers: z.record(z.string(), answerValueSchema).optional(),
-  source: z.enum(['web', 'embed']).optional(),
-});
+const bookingSchema = z
+  .object({
+    eventTypeId: z.string().min(1).max(200),
+    memberId: z.string().min(1).max(200).optional(),
+    startUtc: z.string().min(10).max(40),
+    timezone: z.string().min(1).max(64),
+    name: z.string().trim().max(120).optional(), // legacy combined
+    firstName: z.string().trim().max(60).optional(),
+    lastName: z.string().trim().max(60).optional(),
+    email: z.string().trim().email().max(200),
+    phone: z.string().trim().max(40).optional(),
+    notes: z.string().trim().max(2000).optional(),
+    answers: z.record(z.string(), answerValueSchema).optional(),
+    source: z.enum(['web', 'embed']).optional(),
+  })
+  // Require either both first+last (new flow) or a combined name (legacy).
+  .refine(
+    (d) => (!!d.firstName && !!d.lastName) || (!!d.name && d.name.length > 0),
+    { message: 'name_required' },
+  );
 
 publicRouter.post(
   '/api/bookings',

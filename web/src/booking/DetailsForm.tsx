@@ -33,7 +33,8 @@ export function DetailsForm({
   // Legacy free-text notes box only when there are no custom questions.
   const showNotes = eventType.collectNotes && !hasQuestions;
 
-  const [name, setName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [notes, setNotes] = useState('');
@@ -59,7 +60,8 @@ export function DetailsForm({
 
   const validate = (): boolean => {
     const fe: Record<string, string> = {};
-    if (!name.trim()) fe.__name = 'Please enter your name.';
+    if (!firstName.trim()) fe.__first = 'Please enter your first name.';
+    if (!lastName.trim()) fe.__last = 'Please enter your last name.';
     if (!email.trim()) fe.__email = 'Please enter your email.';
     for (const q of questions) {
       const msg = validateAnswer(q, answers[q.id] ?? emptyAnswer(q));
@@ -80,7 +82,8 @@ export function DetailsForm({
         memberId: provider?.id,
         startUtc: slot.iso,
         timezone: slot.tz,
-        name: name.trim(),
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
         email: email.trim(),
         phone: eventType.collectPhone ? phone.trim() || undefined : undefined,
         notes: showNotes ? notes.trim() || undefined : undefined,
@@ -129,20 +132,36 @@ export function DetailsForm({
 
       {err && <Banner kind="error">{err}</Banner>}
 
-      <Field label="Name">
-        <input
-          className={inputClass}
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value);
-            setFieldErrors((fe) => ({ ...fe, __name: '' }));
-          }}
-          autoComplete="name"
-        />
-        {fieldErrors.__name && (
-          <span className="mt-1 block text-xs text-red-300">{fieldErrors.__name}</span>
-        )}
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="First name">
+          <input
+            className={inputClass}
+            value={firstName}
+            onChange={(e) => {
+              setFirstName(e.target.value);
+              setFieldErrors((fe) => ({ ...fe, __first: '' }));
+            }}
+            autoComplete="given-name"
+          />
+          {fieldErrors.__first && (
+            <span className="mt-1 block text-xs text-red-300">{fieldErrors.__first}</span>
+          )}
+        </Field>
+        <Field label="Last name">
+          <input
+            className={inputClass}
+            value={lastName}
+            onChange={(e) => {
+              setLastName(e.target.value);
+              setFieldErrors((fe) => ({ ...fe, __last: '' }));
+            }}
+            autoComplete="family-name"
+          />
+          {fieldErrors.__last && (
+            <span className="mt-1 block text-xs text-red-300">{fieldErrors.__last}</span>
+          )}
+        </Field>
+      </div>
       <Field label="Email">
         <input
           className={inputClass}

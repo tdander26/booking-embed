@@ -127,7 +127,7 @@ const locationSchema = z.object({
 
 const questionSchema = z.object({
   id: z.string().min(1).max(60),
-  type: z.enum(['text', 'textarea', 'dropdown', 'checkboxes', 'checkbox']),
+  type: z.enum(['text', 'textarea', 'phone', 'dropdown', 'checkboxes', 'checkbox']),
   label: z.string().trim().min(1).max(300),
   required: z.boolean().default(false),
   options: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
@@ -176,7 +176,7 @@ const scheduleSchema = z.object({
 const brandingSchema = z.object({
   displayName: z.string().trim().min(1).max(120).optional(),
   tagline: z.string().max(200).optional(),
-  avatarUrl: z.string().max(500).optional(),
+  avatarUrl: z.string().max(1_400_000).optional(), // allows an uploaded data: URL
   brandColor: z.string().max(20).optional(),
   welcomeText: z.string().max(1000).optional(),
   timezone: z.string().max(64).optional(),
@@ -186,7 +186,7 @@ const memberSchema = z.object({
   name: z.string().trim().min(1).max(120),
   title: z.string().max(120).optional(),
   email: z.string().trim().email().max(200),
-  avatarUrl: z.string().max(500).optional(),
+  avatarUrl: z.string().max(1_400_000).optional(), // allows an uploaded data: URL
   bio: z.string().max(2000).optional(),
   active: z.boolean().default(true),
   featured: z.boolean().default(false),

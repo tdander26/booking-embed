@@ -104,7 +104,9 @@ export const createBooking = (body: {
   memberId?: string;
   startUtc: string;
   timezone: string;
-  name: string;
+  name?: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
   phone?: string;
   notes?: string;

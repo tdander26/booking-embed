@@ -4,6 +4,7 @@ import * as api from '../api/client';
 import type { PublicBranding } from '../api/types';
 import { timezoneOptions } from '../lib/time';
 import { Spinner, Banner, Button, Card, Field, inputClass } from '../components/ui';
+import { ImageUpload } from '../components/ImageUpload';
 
 export function SettingsTab() {
   return (
@@ -93,9 +94,15 @@ function BrandingPanel() {
           />
         </Field>
         <div className="sm:col-span-2">
-          <Field label="Avatar URL" hint="Optional image shown on the booking page.">
-            <input className={inputClass} value={b.avatarUrl} onChange={(e) => set({ avatarUrl: e.target.value })} />
-          </Field>
+          <ImageUpload
+            label="Logo"
+            value={b.avatarUrl}
+            onChange={(v) => set({ avatarUrl: v })}
+            hint="Shown on the booking page header. Square works best."
+            shape="round"
+            maxDim={320}
+            format="png"
+          />
         </div>
         <div className="sm:col-span-2">
           <Field label="Welcome text">

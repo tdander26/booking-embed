@@ -20,6 +20,7 @@ import type {
 } from '../api/types';
 import { guessTimezone, timezoneOptions } from '../lib/time';
 import { Spinner, Banner, Button, Card, Field, inputClass } from '../components/ui';
+import { ImageUpload } from '../components/ImageUpload';
 
 function emptyMember(count: number, tz: string): Member {
   return {
@@ -325,13 +326,15 @@ function MemberEditor({
           />
         </Field>
         <div className="sm:col-span-2">
-          <Field label="Avatar URL" hint="Optional headshot shown in the provider picker.">
-            <input
-              className={inputClass}
-              value={value.avatarUrl ?? ''}
-              onChange={(e) => set({ avatarUrl: e.target.value })}
-            />
-          </Field>
+          <ImageUpload
+            label="Photo"
+            value={value.avatarUrl ?? ''}
+            onChange={(v) => set({ avatarUrl: v })}
+            hint="Headshot shown in the provider picker."
+            shape="round"
+            maxDim={256}
+            format="jpeg"
+          />
         </div>
         <div className="sm:col-span-2">
           <Field label="Bio">
