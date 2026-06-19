@@ -79,7 +79,13 @@ export interface MemberConnection {
 
 // ---------- Custom intake questions ----------
 
-export type QuestionType = 'text' | 'textarea' | 'dropdown' | 'checkboxes' | 'checkbox';
+export type QuestionType =
+  | 'text'
+  | 'textarea'
+  | 'phone'
+  | 'dropdown'
+  | 'checkboxes'
+  | 'checkbox';
 
 /** A custom intake question defined on an event type. id is stable + immutable. */
 export interface IntakeQuestion {

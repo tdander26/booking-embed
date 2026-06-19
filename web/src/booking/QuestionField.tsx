@@ -1,6 +1,20 @@
 import type { IntakeQuestion, AnswerValue } from '../api/types';
 import { Field, inputClass } from '../components/ui';
 
+/** Light, lenient phone formatting as you type. US 10/11-digit numbers get
+ * (xxx) xxx-xxxx; anything starting with '+' or longer is left untouched so
+ * international numbers aren't mangled. */
+export function formatPhone(input: string): string {
+  if (input.trim().startsWith('+')) return input; // international — leave as typed
+  const d = input.replace(/\D/g, '');
+  if (d.length === 11 && d[0] === '1')
+    return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  if (d.length > 10) return input; // unusual length — don't reformat
+  if (d.length > 6) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  if (d.length > 3) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
+  return d;
+}
+
 /** Type-appropriate empty value for a question's initial state. */
 export function emptyAnswer(q: IntakeQuestion): AnswerValue {
   if (q.type === 'checkboxes') return [];
@@ -18,6 +32,13 @@ export function validateAnswer(q: IntakeQuestion, value: AnswerValue): string | 
       const max = q.type === 'textarea' ? 5000 : 1000;
       if (q.required && !s) return 'This field is required.';
       if (s.length > max) return `Please keep this under ${max} characters.`;
+      return null;
+    }
+    case 'phone': {
+      const s = typeof value === 'string' ? value.trim() : '';
+      if (q.required && !s) return 'Please enter a phone number.';
+      if (s && (s.match(/\d/g)?.length ?? 0) < 7) return 'Please enter a valid phone number.';
+      if (s.length > 40) return 'Please keep this under 40 characters.';
       return null;
     }
     case 'dropdown': {
@@ -145,6 +166,26 @@ export function QuestionField({
           placeholder={q.placeholder}
           maxLength={5000}
           onChange={(e) => onChange(e.target.value)}
+        />
+        {error && <span className="mt-1 block text-xs text-red-300">{error}</span>}
+      </Field>
+    );
+  }
+
+  // --- phone (telephone-optimized) ---
+  if (q.type === 'phone') {
+    const s = typeof value === 'string' ? value : '';
+    return (
+      <Field label={label} hint={q.helpText}>
+        <input
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          className={inputClass}
+          value={s}
+          placeholder={q.placeholder || '(555) 123-4567'}
+          maxLength={40}
+          onChange={(e) => onChange(formatPhone(e.target.value))}
         />
         {error && <span className="mt-1 block text-xs text-red-300">{error}</span>}
       </Field>

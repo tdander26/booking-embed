@@ -5,6 +5,7 @@ import { Button, Field, inputClass } from '../components/ui';
 const TYPE_LABELS: Record<QuestionType, string> = {
   text: 'Short text',
   textarea: 'Paragraph',
+  phone: 'Phone number',
   dropdown: 'Dropdown (pick one)',
   checkboxes: 'Checkboxes (pick many)',
   checkbox: 'Single checkbox (consent)',

@@ -21,6 +21,7 @@ import type { BookingAnswer, EventType, IntakeQuestion } from '../types';
 
 const TEXT_MAX = 1000;
 const TEXTAREA_MAX = 5000;
+const PHONE_MAX = 40;
 
 type FieldError = 'required' | 'invalid_option' | 'too_long' | 'invalid_type';
 
@@ -78,6 +79,33 @@ export function validateAnswers(
         }
         if (trimmed.length > max) {
           fields[q.id] = 'too_long';
+          continue;
+        }
+        out.push(answer(q, trimmed));
+        break;
+      }
+
+      case 'phone': {
+        if (rawVal == null || rawVal === '') {
+          if (q.required) fields[q.id] = 'required';
+          continue; // omit empty optional
+        }
+        if (typeof rawVal !== 'string') {
+          fields[q.id] = 'invalid_type';
+          continue;
+        }
+        const trimmed = rawVal.trim();
+        if (trimmed.length === 0) {
+          if (q.required) fields[q.id] = 'required';
+          continue;
+        }
+        if (trimmed.length > PHONE_MAX) {
+          fields[q.id] = 'too_long';
+          continue;
+        }
+        // Lenient: must contain at least 7 digits to be a plausible number.
+        if ((trimmed.match(/\d/g)?.length ?? 0) < 7) {
+          fields[q.id] = 'invalid_option';
           continue;
         }
         out.push(answer(q, trimmed));

@@ -10,7 +10,7 @@ import type {
   BookingConfirmation,
   AnswerValue,
 } from '../api/types';
-import { QuestionField, emptyAnswer, validateAnswer } from './QuestionField';
+import { QuestionField, emptyAnswer, validateAnswer, formatPhone } from './QuestionField';
 
 export function DetailsForm({
   eventType,
@@ -163,9 +163,11 @@ export function DetailsForm({
           <input
             className={inputClass}
             type="tel"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            inputMode="tel"
             autoComplete="tel"
+            placeholder="(555) 123-4567"
+            value={phone}
+            onChange={(e) => setPhone(formatPhone(e.target.value))}
           />
         </Field>
       )}

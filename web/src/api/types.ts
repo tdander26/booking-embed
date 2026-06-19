@@ -4,7 +4,13 @@
 
 export type LocationType = 'google_meet' | 'phone' | 'in_person' | 'custom';
 export type BookingStatus = 'confirmed' | 'cancelled';
-export type QuestionType = 'text' | 'textarea' | 'dropdown' | 'checkboxes' | 'checkbox';
+export type QuestionType =
+  | 'text'
+  | 'textarea'
+  | 'phone'
+  | 'dropdown'
+  | 'checkboxes'
+  | 'checkbox';
 
 export interface PublicBranding {
   displayName: string;
