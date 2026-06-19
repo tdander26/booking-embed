@@ -57,7 +57,12 @@
     var url = buildUrl(container.getAttribute('data-url') || '');
     if (!url) return;
     container.setAttribute('data-booking-mounted', '1');
-    if (!container.style.minHeight) container.style.minHeight = '640px';
+    // The container must be free to GROW as the iframe auto-resizes to its
+    // content. A fixed `height` in the snippet would clip the calendar/slots and
+    // force scrolling, so demote any fixed height to a min-height floor and let
+    // the box grow with its content.
+    if (!container.style.minHeight) container.style.minHeight = container.style.height || '640px';
+    container.style.height = 'auto';
     container.style.width = container.style.width || '100%';
     var iframe = makeIframe(url);
     iframe.style.minHeight = '640px';

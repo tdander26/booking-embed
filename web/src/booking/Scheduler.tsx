@@ -259,7 +259,7 @@ export function Scheduler({
           ) : !selectedDay ? (
             <p className="text-sm text-faint">Pick a highlighted day to see available times.</p>
           ) : (
-            <div className="slot-scroll flex max-h-[340px] flex-col gap-2 overflow-y-auto pr-1">
+            <div className="flex flex-col gap-2">
               {daySlots.map((iso) => (
                 <button
                   key={iso}

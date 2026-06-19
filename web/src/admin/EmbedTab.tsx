@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Copy, Code } from 'lucide-react';
 import * as api from '../api/client';
 import type { EventType, Member } from '../api/types';
@@ -68,7 +68,7 @@ export function EmbedTab({ tenantSlug }: { tenantSlug: string }) {
   const snippets: Record<SnippetKind, string> = useMemo(
     () => ({
       inline: `<!-- Booking widget (inline) -->
-<div class="booking-inline" data-url="${bookingUrl}" style="min-width:320px;height:640px;"></div>
+<div class="booking-inline" data-url="${bookingUrl}" style="min-width:320px;min-height:640px;"></div>
 <script src="${embedSrc}" async></script>`,
       floating: `<!-- Booking widget (floating button) -->
 <script src="${embedSrc}"></script>
@@ -205,20 +205,35 @@ export function EmbedTab({ tenantSlug }: { tenantSlug: string }) {
   );
 }
 
+/** Inline preview that auto-grows to the booking page's content height via the
+ * same `booking.resize` postMessage a real embed uses — so the preview never
+ * shows an internal scrollbar. */
+function InlinePreviewFrame({ url }: { url: string }) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(640);
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data as { event?: string; payload?: { height?: number } } | null;
+      if (!d || d.event !== 'booking.resize' || typeof d.payload?.height !== 'number') return;
+      if (ref.current && e.source === ref.current.contentWindow) {
+        setHeight(Math.max(360, Math.ceil(d.payload.height)));
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+  return (
+    <div className="overflow-hidden rounded-xl border border-hair-soft">
+      <iframe ref={ref} title="Booking preview" src={url} className="w-full" style={{ border: 0, height }} />
+    </div>
+  );
+}
+
 function PreviewCard({ kind, url }: { kind: SnippetKind; url: string }) {
   return (
     <Card className="p-5">
       <h3 className="mb-3 text-sm font-semibold text-ink">Live preview</h3>
-      {kind === 'inline' && (
-        <div className="overflow-hidden rounded-xl border border-hair-soft">
-          <iframe
-            title="Booking preview"
-            src={url}
-            className="h-[560px] w-full"
-            style={{ border: 0 }}
-          />
-        </div>
-      )}
+      {kind === 'inline' && <InlinePreviewFrame url={url} />}
 
       {kind === 'floating' && (
         <div className="relative h-72 overflow-hidden rounded-xl border border-hair-soft bg-surface-2">
