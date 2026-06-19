@@ -72,7 +72,7 @@ export function QuestionField({
   onChange: (v: AnswerValue) => void;
 }) {
   const q = question;
-  const label = q.required ? `${q.label} *` : q.label;
+  const label = q.label;
 
   // --- checkbox (single consent) renders its own inline label ---
   if (q.type === 'checkbox') {
@@ -86,7 +86,10 @@ export function QuestionField({
             onChange={(e) => onChange(e.target.checked)}
             className="h-5 w-5 shrink-0 accent-[var(--brand)]"
           />
-          <span>{label}</span>
+          <span>
+            {label}
+            {q.required && <span className="text-red-400"> *</span>}
+          </span>
         </label>
         {q.helpText && <span className="mt-1 block text-xs text-faint">{q.helpText}</span>}
         {error && <span className="mt-1 block text-xs text-red-300">{error}</span>}
@@ -101,7 +104,7 @@ export function QuestionField({
       onChange(arr.includes(opt) ? arr.filter((o) => o !== opt) : [...arr, opt]);
     };
     return (
-      <Field label={label} hint={q.helpText}>
+      <Field label={label} required={q.required} hint={q.helpText}>
         <div className="space-y-2">
           {(q.options ?? []).map((opt) => {
             const on = arr.includes(opt);
@@ -135,7 +138,7 @@ export function QuestionField({
   if (q.type === 'dropdown') {
     const s = typeof value === 'string' ? value : '';
     return (
-      <Field label={label} hint={q.helpText}>
+      <Field label={label} required={q.required} hint={q.helpText}>
         <select
           value={s}
           onChange={(e) => onChange(e.target.value)}
@@ -159,7 +162,7 @@ export function QuestionField({
   if (q.type === 'textarea') {
     const s = typeof value === 'string' ? value : '';
     return (
-      <Field label={label} hint={q.helpText}>
+      <Field label={label} required={q.required} hint={q.helpText}>
         <textarea
           className={`${inputClass} min-h-[84px] resize-y`}
           value={s}
@@ -176,7 +179,7 @@ export function QuestionField({
   if (q.type === 'phone') {
     const s = typeof value === 'string' ? value : '';
     return (
-      <Field label={label} hint={q.helpText}>
+      <Field label={label} required={q.required} hint={q.helpText}>
         <input
           type="tel"
           inputMode="tel"

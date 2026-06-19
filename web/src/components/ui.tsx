@@ -61,16 +61,19 @@ export function Banner({
 export function Field({
   label,
   hint,
+  required,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   hint?: string;
+  required?: boolean;
   children: ReactNode;
 }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-muted">
         {label}
+        {required && <span className="text-red-400"> *</span>}
       </span>
       {children}
       {hint && <span className="mt-1 block text-xs text-faint">{hint}</span>}

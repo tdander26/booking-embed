@@ -41,10 +41,15 @@ export function EmbedTab() {
   const origin = window.location.origin;
   const selected = useMemo(() => types?.find((t) => t.slug === slug) ?? null, [types, slug]);
 
-  // Providers are only worth choosing when this type has more than one.
+  // Only ACTIVE providers are offered to bookers, so only show those here too.
   const typeMembers = useMemo(() => {
     if (!selected) return [];
-    return members.filter((m) => selected.memberIds.includes(m.id));
+    return members.filter((m) => m.active && selected.memberIds.includes(m.id));
+  }, [selected, members]);
+  // Inactive providers assigned to this type — hidden from bookers; flag them.
+  const inactiveOnType = useMemo(() => {
+    if (!selected) return [];
+    return members.filter((m) => !m.active && selected.memberIds.includes(m.id));
   }, [selected, members]);
   const showProvider = typeMembers.length > 1;
 
@@ -159,6 +164,17 @@ export function EmbedTab() {
                 ))}
               </select>
             </Field>
+          </div>
+        )}
+
+        {inactiveOnType.length > 0 && (
+          <div className="mt-4">
+            <Banner kind="info">
+              {inactiveOnType.map((m) => m.name).join(', ')}{' '}
+              {inactiveOnType.length > 1 ? 'are' : 'is'} assigned to this meeting type but{' '}
+              <strong>inactive</strong>, so {inactiveOnType.length > 1 ? 'they' : 'they'} won't appear
+              to bookers. Activate in the Providers tab (and set their hours) to offer them.
+            </Banner>
           </div>
         )}
       </Card>

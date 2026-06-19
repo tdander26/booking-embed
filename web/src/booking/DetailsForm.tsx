@@ -133,7 +133,7 @@ export function DetailsForm({
       {err && <Banner kind="error">{err}</Banner>}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="First name">
+        <Field label="First name" required>
           <input
             className={inputClass}
             value={firstName}
@@ -147,7 +147,7 @@ export function DetailsForm({
             <span className="mt-1 block text-xs text-red-300">{fieldErrors.__first}</span>
           )}
         </Field>
-        <Field label="Last name">
+        <Field label="Last name" required>
           <input
             className={inputClass}
             value={lastName}
@@ -162,7 +162,7 @@ export function DetailsForm({
           )}
         </Field>
       </div>
-      <Field label="Email">
+      <Field label="Email" required>
         <input
           className={inputClass}
           type="email"
