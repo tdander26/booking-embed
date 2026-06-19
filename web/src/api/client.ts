@@ -252,22 +252,14 @@ export const adminSaveBranding = (body: Partial<PublicBranding>) =>
     body: JSON.stringify(body),
   });
 
-// ---- Onboarding (no tenant prefix; needs a verified Google token) ----
-export async function signup(body: {
-  practiceName: string;
-  desiredSlug: string;
-  accessCode: string;
-  timezone?: string;
-}): Promise<{ tenantSlug: string; adminUrl: string }> {
+/** Authed fetch to a RAW (non-tenant-scoped) path, attaching the Firebase token.
+ * Used by signup + platform-owner endpoints, which aren't under /api/t/{tenant}. */
+async function rawAuthed<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = await idToken();
-  const res = await fetch('/api/signup', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  });
+  const headers: Record<string, string> = { ...(opts.headers as Record<string, string>) };
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(path, { ...opts, headers });
   const text = await res.text();
   const data = text ? safeParse(text) : null;
   if (!res.ok) {
@@ -278,5 +270,39 @@ export async function signup(body: {
       data?.fields ?? data?.details,
     );
   }
-  return data as { tenantSlug: string; adminUrl: string };
+  return data as T;
 }
+
+// ---- Onboarding (no tenant prefix; needs a verified Google token) ----
+export const signup = (body: {
+  practiceName: string;
+  desiredSlug: string;
+  accessCode: string;
+  timezone?: string;
+}) =>
+  rawAuthed<{ tenantSlug: string; adminUrl: string }>('/api/signup', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+// ---- Platform owner: signup access codes ----
+export interface SignupCodeView {
+  hashPrefix: string;
+  label: string;
+  maxUses: number;
+  uses: number;
+  active: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+}
+export const platformListCodes = () =>
+  rawAuthed<{ codes: SignupCodeView[] }>('/api/platform/signup-codes');
+export const platformMintCode = (body: {
+  label: string;
+  maxUses: number;
+  expiresAt?: string | null;
+}) =>
+  rawAuthed<{ code: string; label: string; maxUses: number; uses: number; active: boolean }>(
+    '/api/platform/signup-codes',
+    { method: 'POST', body: JSON.stringify(body) },
+  );
