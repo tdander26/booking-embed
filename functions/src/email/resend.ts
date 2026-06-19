@@ -23,8 +23,13 @@ export async function sendEmail(opts: {
   idempotencyKey?: string;
 }): Promise<string | null> {
   const key = secret();
-  if (isEmulator() || !key) {
-    logger.info('[email:dev] (not sent)', { to: opts.to, subject: opts.subject });
+  // Real Resend keys start with "re_"; anything else (incl. deploy placeholders)
+  // means email isn't configured yet — log instead of erroring on every send.
+  if (isEmulator() || !key.startsWith('re_')) {
+    logger.info('[email:dev] (not sent — Resend not configured)', {
+      to: opts.to,
+      subject: opts.subject,
+    });
     return null;
   }
   const resend = new Resend(key);

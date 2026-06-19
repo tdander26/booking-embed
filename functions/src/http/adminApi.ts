@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { DateTime } from 'luxon';
 import { z } from 'zod';
 import { auth, db, COL } from '../firebase';
-import { isEmulator, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from '../config';
+import { isEmulator, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OWNER_EMAIL } from '../config';
 import { loadBranding, saveBranding } from '../branding';
 import { loadGoogleTokens, makeOAuthClient, buildConsentUrl } from '../google/oauth';
 import { resolveRedirectUri, safeValue } from './oauthRoutes';
@@ -33,9 +33,20 @@ async function requireAdmin(
     const m = header.match(/^Bearer (.+)$/);
     if (!m) throw unauthorized();
     const decoded = await auth.verifyIdToken(m[1]);
-    // Production requires the `admin` custom claim. In the emulator any signed-in
-    // user is treated as admin so local development needs no claim wiring.
-    if (!isEmulator() && decoded.admin !== true) {
+    // Access is granted to: the emulator (any signed-in user), holders of the
+    // `admin` custom claim, or the configured bootstrap OWNER_EMAIL (verified).
+    const ownerEmail = (() => {
+      try {
+        return OWNER_EMAIL.value().trim().toLowerCase();
+      } catch {
+        return '';
+      }
+    })();
+    const isOwner =
+      !!ownerEmail &&
+      decoded.email_verified === true &&
+      decoded.email?.toLowerCase() === ownerEmail;
+    if (!isEmulator() && decoded.admin !== true && !isOwner) {
       throw forbidden('Admin access required.', 'not_admin');
     }
     req.uid = decoded.uid;

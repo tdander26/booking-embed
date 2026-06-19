@@ -19,7 +19,10 @@ ui-debug.log
 .env.local
 */.env
 */.env.local
+*/.env.production
 */.secret.local
+functions/.env.*
+!functions/.env.example
 .runtimeconfig.json
 service-account*.json
 

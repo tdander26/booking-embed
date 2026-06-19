@@ -27,6 +27,10 @@ export const GOOGLE_REDIRECT_URI = defineString('GOOGLE_REDIRECT_URI', {
 // OAuth redirect. Falls back to the request origin when empty.
 export const APP_BASE_URL = defineString('APP_BASE_URL', { default: '' });
 
+// Bootstrap owner: this verified email gets admin access without needing the
+// `admin` custom claim, so the owner can use /admin immediately after deploy.
+export const OWNER_EMAIL = defineString('OWNER_EMAIL', { default: '' });
+
 // Transactional email (Resend).
 export const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
 export const EMAIL_FROM = defineString('EMAIL_FROM', {
