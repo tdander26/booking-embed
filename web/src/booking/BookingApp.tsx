@@ -8,7 +8,7 @@ import type {
   NextAvailableResponse,
   BookingConfirmation,
 } from '../api/types';
-import { applyBrand } from '../lib/brand';
+import { applyBrand, applyTheme } from '../lib/brand';
 import { isEmbedded, useEmbedResize } from '../lib/embed';
 import { guessTimezone } from '../lib/time';
 import { Spinner, Banner } from '../components/ui';
@@ -104,6 +104,7 @@ export function BookingApp() {
         const b = await api.getBranding();
         if (!alive) return;
         setBranding(b);
+        applyTheme(b.theme);
         applyBrand(b.brandColor);
         document.title = `Book with ${b.displayName}`;
         // The invitee's local tz wins; fall back to the host's branding tz.
@@ -262,7 +263,9 @@ export function BookingApp() {
           />
         )}
 
-        {step === 'done' && confirmation && <Confirmed confirmation={confirmation} />}
+        {step === 'done' && confirmation && (
+          <Confirmed confirmation={confirmation} branding={branding} />
+        )}
       </div>
     </Shell>
   );

@@ -6,6 +6,17 @@ export function applyBrand(color?: string): void {
   root.style.setProperty('--brand-fg', readableForeground(color));
 }
 
+/** Apply the booking-page color theme. 'auto' follows the device preference.
+ * Sets data-theme on <html>, which the CSS variable system reads (styles.css). */
+export function applyTheme(theme?: 'dark' | 'light' | 'auto'): void {
+  let mode: 'dark' | 'light' = 'dark';
+  if (theme === 'light') mode = 'light';
+  else if (theme === 'auto') {
+    mode = window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  document.documentElement.setAttribute('data-theme', mode);
+}
+
 function readableForeground(hex: string): string {
   const c = hex.replace('#', '');
   if (c.length !== 6) return '#ffffff';

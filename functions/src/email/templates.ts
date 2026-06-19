@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import type { Booking, Branding } from '../types';
-import { manageUrl, appBaseUrl } from '../util/urls';
+import { manageUrl, adminUrl } from '../util/urls';
 import { formatAnswersText } from '../scheduling/answers';
 
 export interface EmailContent {
@@ -103,7 +103,7 @@ function detailsBlock(booking: Booking, branding: Branding): string {
   const when = fmtWhen(booking.startUtc, booking.invitee.timezone);
   const loc = locationLine(booking);
   const brand = escapeHtml(branding.brandColor || '#0f766e');
-  const manage = manageUrl(booking.id, booking.cancelToken);
+  const manage = manageUrl(booking.tenantId, booking.id, booking.cancelToken);
   const provider = hostName(booking, branding);
   return `
     <table role="presentation" width="100%" style="background:#f8fafc;border-radius:10px;margin:4px 0 20px;">
@@ -137,7 +137,7 @@ function textVersion(booking: Booking, branding: Branding, lead: string): string
     locationLine(booking),
     `${booking.durationMinutes} minutes`,
     answersText(booking),
-    `Manage: ${manageUrl(booking.id, booking.cancelToken)}`,
+    `Manage: ${manageUrl(booking.tenantId, booking.id, booking.cancelToken)}`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -256,9 +256,9 @@ export function providerNewBookingEmail(
   branding: Branding,
   providerTz: string,
 ): EmailContent {
-  const base = appBaseUrl();
-  const adminLink = base
-    ? `<p style="font-size:13px;color:#64748b;">Manage in your <a href="${escapeHtml(base)}/admin" style="color:${escapeHtml(branding.brandColor || '#0f766e')};">scheduling admin</a>.</p>`
+  const admin = adminUrl(booking.tenantId);
+  const adminLink = admin
+    ? `<p style="font-size:13px;color:#64748b;">Manage in your <a href="${escapeHtml(admin)}" style="color:${escapeHtml(branding.brandColor || '#0f766e')};">scheduling admin</a>.</p>`
     : '';
   return {
     subject: `New booking: ${booking.invitee.name} — ${booking.eventTypeName} (${fmtWhen(
@@ -284,7 +284,7 @@ export function providerNewBookingEmail(
       `Email: ${booking.invitee.email}`,
       booking.invitee.phone ? `Phone: ${booking.invitee.phone}` : '',
       answersText(booking),
-      base ? `Admin: ${base}/admin` : '',
+      admin ? `Admin: ${admin}` : '',
     ]
       .filter(Boolean)
       .join('\n'),

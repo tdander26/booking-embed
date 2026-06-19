@@ -2,16 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ---- Premium black + gold theme (Momentum brand) ----
-   Tokens are CSS variables so the accent (--brand*) can be themed per-practice
-   at runtime while the dark surface system stays fixed. */
-:root {
+/* ---- Premium theme tokens ----
+   Tokens are CSS variables so (a) the accent (--brand*) can be themed per-practice
+   at runtime and (b) the whole surface system flips between dark (default) and a
+   warm light mode via html[data-theme="light"] — every Tailwind color token maps
+   to one of these vars, so one override re-themes the entire app. */
+:root,
+html[data-theme='dark'] {
   --bg: #0a0a0b;
+  --bg-glow: #1b1813; /* warm radial glow behind the page */
   --surface: #141416;
   --surface-2: #1a1a1d;
   --surface-3: #202024;
   --hair: rgba(201, 168, 76, 0.16); /* gold hairline */
   --hair-soft: rgba(255, 255, 255, 0.06);
+  --overlay: rgba(255, 255, 255, 0.05); /* raised tint (hover/skeleton) */
+  --overlay-soft: rgba(255, 255, 255, 0.03);
   --text: #f4f1ea; /* warm white */
   --text-muted: #a8a094; /* warm gray */
   --text-faint: #6f685d;
@@ -21,6 +27,30 @@
   --brand-dark: #a07830;
   --brand-fg: #0a0a0b; /* ink on gold */
   --brand-glow: rgba(201, 168, 76, 0.25);
+  --shadow-lux: rgba(0, 0, 0, 0.7);
+}
+
+/* Warm, clean light mode. Surfaces flip to off-white/white; the gold accent and
+   its dark-ink buttons stay (gold reads well on light). Overlays become subtle
+   dark tints so hovers/skeletons remain visible. */
+html[data-theme='light'] {
+  --bg: #f6f5f1;
+  --bg-glow: #fbf6ea;
+  --surface: #ffffff;
+  --surface-2: #faf9f5;
+  --surface-3: #f1efe8;
+  --hair: rgba(160, 120, 48, 0.30); /* gold hairline, a touch stronger */
+  --hair-soft: rgba(28, 26, 23, 0.1);
+  --overlay: rgba(28, 26, 23, 0.05);
+  --overlay-soft: rgba(28, 26, 23, 0.028);
+  --text: #1d1b17; /* warm near-black */
+  --text-muted: #5f584c;
+  --text-faint: #938b7e;
+
+  --brand-dark: #8a6a26; /* deepen so gold-on-white text/icons read better */
+  --brand-fg: #1d1b17; /* dark ink on gold */
+  --brand-glow: rgba(160, 120, 48, 0.28);
+  --shadow-lux: rgba(40, 35, 25, 0.16);
 }
 
 html,
@@ -36,7 +66,7 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   background:
-    radial-gradient(1100px 560px at 50% -8%, #1b1813 0%, rgba(10, 10, 11, 0) 60%),
+    radial-gradient(1100px 560px at 50% -8%, var(--bg-glow) 0%, transparent 60%),
     var(--bg);
   background-attachment: fixed;
 }

@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { logger } from 'firebase-functions';
-import { db, COL } from './firebase';
+import { db, tenantDb } from './firebase';
 import { sendEmail } from './email/resend';
 import { sendSms } from './sms/twilio';
 import {
@@ -16,10 +16,11 @@ import type { Booking, Branding } from './types';
 
 /** The provider's notification email + the timezone to show them times in. */
 async function providerContact(
+  tenantId: string,
   booking: Booking,
   branding: Branding,
 ): Promise<{ email: string; tz: string } | null> {
-  const member = await loadMember(booking.memberId);
+  const member = await loadMember(tenantId, booking.memberId);
   if (!member?.email) return null;
   return { email: member.email, tz: member.timezone || branding.timezone };
 }
@@ -30,11 +31,12 @@ async function providerContact(
  * one send happens. Backs both email AND SMS (Twilio has no idempotency key).
  */
 export async function sendOnce(
+  tenantId: string,
   bookingId: string,
   kind: string,
   fn: () => Promise<void>,
 ): Promise<boolean> {
-  const ref = db.collection(COL.reminderSends).doc(`${bookingId}_${kind}`);
+  const ref = tenantDb(tenantId).reminderSends().doc(`${bookingId}_${kind}`);
   const claimed = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (snap.exists) return false;
@@ -48,31 +50,34 @@ export async function sendOnce(
 }
 
 export async function sendBookingConfirmation(
+  tenantId: string,
   booking: Booking,
   branding: Branding,
 ): Promise<void> {
   // 1) The person scheduling (invitee).
-  await sendOnce(booking.id, 'confirm', async () => {
+  await sendOnce(tenantId, booking.id, 'confirm', async () => {
     const { subject, html, text } = confirmationEmail(booking, branding);
     await sendEmail({
       to: booking.invitee.email,
       subject,
       html,
       text,
+      from: branding.emailFrom,
       idempotencyKey: `confirm/${booking.id}`,
     });
   });
 
   // 2) The person being scheduled with (provider).
-  const provider = await providerContact(booking, branding);
+  const provider = await providerContact(tenantId, booking, branding);
   if (provider) {
-    await sendOnce(booking.id, 'confirm-provider', async () => {
+    await sendOnce(tenantId, booking.id, 'confirm-provider', async () => {
       const { subject, html, text } = providerNewBookingEmail(booking, branding, provider.tz);
       await sendEmail({
         to: provider.email,
         subject,
         html,
         text,
+        from: branding.emailFrom,
         idempotencyKey: `confirm-provider/${booking.id}`,
       });
     });
@@ -80,17 +85,19 @@ export async function sendBookingConfirmation(
 }
 
 export async function sendBookingReminder(
+  tenantId: string,
   booking: Booking,
   branding: Branding,
   minutesBefore: number,
 ): Promise<void> {
-  await sendOnce(booking.id, `reminder-${minutesBefore}`, async () => {
+  await sendOnce(tenantId, booking.id, `reminder-${minutesBefore}`, async () => {
     const { subject, html, text } = reminderEmail(booking, branding, minutesBefore);
     await sendEmail({
       to: booking.invitee.email,
       subject,
       html,
       text,
+      from: branding.emailFrom,
       idempotencyKey: `reminder/${booking.id}/${minutesBefore}`,
     });
     if (booking.invitee.phone) {
@@ -112,29 +119,32 @@ export async function sendBookingReminder(
 }
 
 export async function sendBookingCancellation(
+  tenantId: string,
   booking: Booking,
   branding: Branding,
 ): Promise<void> {
-  await sendOnce(booking.id, 'cancel', async () => {
+  await sendOnce(tenantId, booking.id, 'cancel', async () => {
     const { subject, html, text } = cancellationEmail(booking, branding);
     await sendEmail({
       to: booking.invitee.email,
       subject,
       html,
       text,
+      from: branding.emailFrom,
       idempotencyKey: `cancel/${booking.id}`,
     });
   });
 
-  const provider = await providerContact(booking, branding);
+  const provider = await providerContact(tenantId, booking, branding);
   if (provider) {
-    await sendOnce(booking.id, 'cancel-provider', async () => {
+    await sendOnce(tenantId, booking.id, 'cancel-provider', async () => {
       const { subject, html, text } = providerCancellationEmail(booking, branding, provider.tz);
       await sendEmail({
         to: provider.email,
         subject,
         html,
         text,
+        from: branding.emailFrom,
         idempotencyKey: `cancel-provider/${booking.id}`,
       });
     });

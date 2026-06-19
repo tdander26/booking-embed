@@ -22,8 +22,8 @@ export function Button({
   const styles: Record<string, string> = {
     primary:
       'text-brand-fg shadow-gold-glow hover:-translate-y-0.5 [background:linear-gradient(100deg,var(--brand-light),var(--brand)_55%,var(--brand-dark))]',
-    ghost: 'text-muted hover:text-ink hover:bg-white/5',
-    outline: 'border border-hair text-ink hover:border-brand/60 hover:bg-white/[0.03]',
+    ghost: 'text-muted hover:text-ink hover:bg-overlay',
+    outline: 'border border-hair text-ink hover:border-brand/60 hover:bg-overlay-soft',
     danger: 'bg-red-500/90 text-white hover:bg-red-500',
   };
   return (
@@ -49,7 +49,7 @@ export function Banner({
   children: ReactNode;
 }) {
   const styles: Record<string, string> = {
-    info: 'bg-white/[0.03] text-muted border-hair-soft',
+    info: 'bg-overlay-soft text-muted border-hair-soft',
     error: 'bg-red-500/10 text-red-300 border-red-500/30',
     success: 'bg-brand/10 text-brand-light border-brand/30',
   };

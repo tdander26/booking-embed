@@ -1,15 +1,17 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { DateTime } from 'luxon';
 import { z } from 'zod';
-import { auth, db, COL } from '../firebase';
-import { isEmulator, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OWNER_EMAIL } from '../config';
-import { loadBranding, saveBranding } from '../branding';
+import { auth, db, ROOT, tenantDb } from '../firebase';
 import {
-  loadGoogleTokens,
-  makeOAuthClient,
-  buildConsentUrl,
-  listCalendars,
-} from '../google/oauth';
+  isEmulator,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  OWNER_EMAIL,
+  PLATFORM_OWNER_EMAIL,
+} from '../config';
+import { loadBranding, saveBranding } from '../branding';
+import { tenantActive } from '../tenants';
+import { makeOAuthClient, buildConsentUrl, listCalendars } from '../google/oauth';
 import {
   loadMember,
   listMembers,
@@ -46,27 +48,45 @@ import type {
 
 export const adminRouter = Router();
 
+type AdminRole = 'platform' | 'owner' | 'admin';
+
 interface AdminRequest extends Request {
   uid?: string;
   adminEmail?: string;
-  isOwner?: boolean;
+  tenantId?: string;
+  role?: AdminRole;
   memberId?: string | null;
 }
 
-function safeOwnerEmail(): string {
-  try {
-    return OWNER_EMAIL.value().trim().toLowerCase();
-  } catch {
-    return '';
+/** Platform super-admin email: PLATFORM_OWNER_EMAIL, falling back to the legacy
+ * OWNER_EMAIL so existing deployments keep cross-tenant access without a new env. */
+function safePlatformOwnerEmail(): string {
+  for (const p of [PLATFORM_OWNER_EMAIL, OWNER_EMAIL]) {
+    try {
+      const v = p.value().trim().toLowerCase();
+      if (v) return v;
+    } catch {
+      /* ignore */
+    }
   }
+  return '';
 }
 
+/**
+ * Tenant-scoped admin gate. Mounted at /api/admin/t/:tenantId, so the tenant is
+ * the mount param and every handler derives its tenantDb from req.tenantId
+ * (never a body/query field). Role: 'platform' (super-admin, any tenant),
+ * 'owner' / 'admin' (a member of THIS tenant with isAdmin).
+ */
 async function requireAdmin(
   req: AdminRequest,
   _res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
+    const tenantId = req.params.tenantId;
+    if (!tenantId) throw notFound('Unknown practice', 'no_tenant');
+
     const header = req.headers.authorization ?? '';
     const m = header.match(/^Bearer (.+)$/);
     if (!m) throw unauthorized();
@@ -74,31 +94,44 @@ async function requireAdmin(
     const email = decoded.email?.toLowerCase() ?? '';
     const verified = decoded.email_verified === true;
 
-    // Access is granted to: the emulator (any signed-in user), holders of the
-    // `admin` custom claim, the configured bootstrap OWNER_EMAIL (verified), or
-    // an active member whose verified email matches and `isAdmin === true`.
-    const ownerEmail = safeOwnerEmail();
-    const isOwner = !!ownerEmail && verified && email === ownerEmail;
+    // The tenant must exist and be active before we authenticate against it.
+    const tenant = await tenantActive(tenantId);
+    if (!tenant) throw notFound('Unknown practice', 'no_tenant');
 
-    let memberAdmin = false;
+    req.uid = decoded.uid;
+    req.adminEmail = email;
+    req.tenantId = tenantId;
+
+    // Platform super-admin (global `admin` claim or the configured email) can
+    // administer ANY tenant.
+    const platformEmail = safePlatformOwnerEmail();
+    const isPlatform =
+      decoded.admin === true || (verified && !!platformEmail && email === platformEmail);
+    if (isPlatform) {
+      req.role = 'platform';
+      req.memberId = null;
+      next();
+      return;
+    }
+
+    // Per-tenant member lookup (live, not claim-based) so a newly-added admin
+    // gets in on first sign-in.
+    let role: AdminRole | undefined;
     let memberId: string | null = null;
     if (verified && email) {
-      // Live per-request lookup (not claim-based) so a newly-added admin gets in
-      // on first sign-in. Also resolves the owner's own member doc for self-scoped
-      // Google connect, when one exists.
-      const mem = await loadMemberByEmail(email);
-      if (mem) {
+      const mem = await loadMemberByEmail(tenantId, email);
+      if (mem && mem.active === true && mem.isAdmin === true) {
         memberId = mem.id;
-        memberAdmin = mem.active === true && mem.isAdmin === true;
+        role = mem.role === 'owner' ? 'owner' : 'admin';
       }
     }
 
-    if (!isEmulator() && decoded.admin !== true && !isOwner && !memberAdmin) {
-      throw forbidden('Admin access required.', 'not_admin');
-    }
-    req.uid = decoded.uid;
-    req.adminEmail = email;
-    req.isOwner = isOwner;
+    // Emulator convenience: any signed-in user administers the tenant they hit.
+    if (!role && isEmulator()) role = 'owner';
+
+    if (!role) throw forbidden('Admin access required.', 'not_admin');
+
+    req.role = role;
     req.memberId = memberId;
     next();
   } catch (err) {
@@ -106,13 +139,26 @@ async function requireAdmin(
   }
 }
 
-adminRouter.use('/api/admin', requireAdmin);
+adminRouter.use('/api/admin/t/:tenantId', requireAdmin);
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const HM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function validTz(tz: string): boolean {
   return DateTime.now().setZone(tz).isValid;
+}
+
+/** Owner-or-platform gate for tenant-wide admin actions. */
+function assertOwner(req: AdminRequest): void {
+  if (req.role === 'platform' || req.role === 'owner') return;
+  throw forbidden('Only the practice owner can do that.', 'owner_only');
+}
+
+/** Throws unless the caller may manage this member (platform/owner/self). */
+function assertCanManageMember(req: AdminRequest, memberId: string): void {
+  if (req.role === 'platform' || req.role === 'owner') return;
+  if (req.memberId === memberId) return;
+  throw forbidden('You can only manage your own provider profile.', 'forbidden');
 }
 
 const windowSchema = z.object({
@@ -144,12 +190,8 @@ const eventTypeSchema = z.object({
   active: z.boolean().default(true),
   color: z.string().max(20).default('#0f766e'),
   location: locationSchema,
-  // v2: providers offering this type + per-type intake questions. Both default
-  // to [] so legacy single-provider docs keep validating.
   memberIds: z.array(z.string().min(1).max(200)).max(50).default([]),
   questions: z.array(questionSchema).max(50).default([]),
-  // Relaxed to optional: per-member scheduling resolves the schedule from
-  // member.defaultScheduleId. Kept (writable) for legacy back-compat.
   availabilityScheduleId: z.string().min(1).optional(),
   bufferBeforeMinutes: z.number().int().min(0).max(480).default(0),
   bufferAfterMinutes: z.number().int().min(0).max(480).default(0),
@@ -169,7 +211,6 @@ const scheduleSchema = z.object({
   overrides: z
     .array(z.object({ date: z.string().regex(DATE_RE), windows: z.array(windowSchema) }))
     .default([]),
-  // v2: owning member (null/absent = legacy/global).
   memberId: z.string().min(1).max(200).nullable().optional(),
 });
 
@@ -180,6 +221,10 @@ const brandingSchema = z.object({
   brandColor: z.string().max(20).optional(),
   welcomeText: z.string().max(1000).optional(),
   timezone: z.string().max(64).optional(),
+  emailFrom: z.string().max(200).optional(),
+  adsConversionId: z.string().max(40).optional(),
+  adsConversionLabel: z.string().max(120).optional(),
+  theme: z.enum(['dark', 'light', 'auto']).optional(),
 });
 
 const memberSchema = z.object({
@@ -197,13 +242,16 @@ const memberSchema = z.object({
   defaultScheduleId: z.string().min(1).max(200).nullable().default(null),
 });
 
-async function ensureUniqueSlug(desired: string, exceptId?: string): Promise<string> {
-  let base = slugify(desired) || 'event';
+async function ensureUniqueSlug(
+  tenantId: string,
+  desired: string,
+  exceptId?: string,
+): Promise<string> {
+  const base = slugify(desired) || 'event';
   let candidate = base;
   let n = 1;
-  // Small loop; event types are few.
   for (;;) {
-    const q = await db.collection(COL.eventTypes).where('slug', '==', candidate).get();
+    const q = await tenantDb(tenantId).eventTypes().where('slug', '==', candidate).get();
     const clash = q.docs.some((d) => d.id !== exceptId);
     if (!clash) return candidate;
     n += 1;
@@ -213,11 +261,12 @@ async function ensureUniqueSlug(desired: string, exceptId?: string): Promise<str
 
 // ---- Identity ----
 adminRouter.get(
-  '/api/admin/me',
+  '/api/admin/t/:tenantId/me',
   wrap(async (req: AdminRequest, res) => {
     res.json({
       email: req.adminEmail ?? '',
-      isOwner: req.isOwner === true,
+      tenantId: req.tenantId ?? '',
+      role: req.role ?? 'admin',
       memberId: req.memberId ?? null,
     });
   }),
@@ -225,62 +274,66 @@ adminRouter.get(
 
 // ---- Members (providers) ----
 adminRouter.get(
-  '/api/admin/members',
-  wrap(async (_req, res) => {
-    const members = await listMembers();
+  '/api/admin/t/:tenantId/members',
+  wrap(async (req: AdminRequest, res) => {
+    const members = await listMembers(req.tenantId!);
     res.json({ members });
   }),
 );
 
 /** Reject a create/update whose email already belongs to another member. */
-async function assertEmailFree(email: string, exceptId?: string): Promise<void> {
-  const existing = await loadMemberByEmail(email);
+async function assertEmailFree(
+  tenantId: string,
+  email: string,
+  exceptId?: string,
+): Promise<void> {
+  const existing = await loadMemberByEmail(tenantId, email);
   if (existing && existing.id !== exceptId) {
     throw conflict('That email already belongs to another provider.', 'email_taken');
   }
 }
 
-adminRouter.post(
-  '/api/admin/members',
-  wrap(async (req: AdminRequest, res) => {
-    if (req.isOwner !== true) {
-      throw forbidden('Only the owner can add providers.', 'owner_only');
-    }
-    const parsed = memberSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest('Invalid provider.', 'invalid_body');
-    if (parsed.data.timezone && !validTz(parsed.data.timezone)) {
-      throw badRequest('Invalid timezone.', 'bad_timezone');
-    }
-    const email = parsed.data.email.trim().toLowerCase();
-    await assertEmailFree(email);
-    // Stable, human-readable id derived from the name; deduped against existing.
-    const id = await uniqueMemberId(parsed.data.name);
-    const member = await createMember(id, { ...parsed.data, email });
-    res.status(201).json(member);
-  }),
-);
-
-/** Generate a collision-free member id like `mbr_anna_payne`. */
-async function uniqueMemberId(name: string): Promise<string> {
+/** Generate a collision-free member id like `mbr_anna_payne`, scoped to tenant. */
+async function uniqueMemberId(tenantId: string, name: string): Promise<string> {
   const base = `mbr_${sanitizeForDocId(name.toLowerCase()).replace(/-+/g, '_')}`.slice(0, 100) || 'mbr_x';
   let candidate = base;
   let n = 1;
   for (;;) {
-    const snap = await db.collection(COL.members).doc(candidate).get();
+    const snap = await tenantDb(tenantId).members().doc(candidate).get();
     if (!snap.exists) return candidate;
     n += 1;
     candidate = `${base}_${n}`;
   }
 }
 
-adminRouter.put(
-  '/api/admin/members/:id',
+adminRouter.post(
+  '/api/admin/t/:tenantId/members',
   wrap(async (req: AdminRequest, res) => {
+    assertOwner(req);
+    const tenantId = req.tenantId!;
+    const parsed = memberSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid provider.', 'invalid_body');
+    if (parsed.data.timezone && !validTz(parsed.data.timezone)) {
+      throw badRequest('Invalid timezone.', 'bad_timezone');
+    }
+    const email = parsed.data.email.trim().toLowerCase();
+    await assertEmailFree(tenantId, email);
+    const id = await uniqueMemberId(tenantId, parsed.data.name);
+    // New providers are admins by default but never 'owner' (single owner/tenant).
+    const member = await createMember(tenantId, id, { ...parsed.data, email, role: 'admin' });
+    res.status(201).json(member);
+  }),
+);
+
+adminRouter.put(
+  '/api/admin/t/:tenantId/members/:id',
+  wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const id = req.params.id;
-    const existing = await loadMember(id);
+    const existing = await loadMember(tenantId, id);
     if (!existing) throw notFound('Provider not found', 'no_member');
 
-    const isOwner = req.isOwner === true;
+    const isOwner = req.role === 'platform' || req.role === 'owner';
     const isSelf = req.memberId === id;
     if (!isOwner && !isSelf) {
       throw forbidden('You can only edit your own provider profile.', 'forbidden');
@@ -295,7 +348,7 @@ adminRouter.put(
     }
     if (typeof patch.email === 'string') {
       const email = patch.email.trim().toLowerCase();
-      await assertEmailFree(email, id);
+      await assertEmailFree(tenantId, email, id);
       patch.email = email;
     }
 
@@ -305,31 +358,35 @@ adminRouter.put(
       delete patch.email;
       delete patch.active;
       delete patch.featured;
-    } else if (req.adminEmail && existing.email === req.adminEmail) {
-      // Owner editing their own member doc: keep admin access (cannot lock self out).
+    }
+    // The owner member must always stay an active admin (cannot lock the tenant out).
+    if (existing.role === 'owner') {
       patch.isAdmin = true;
+      patch.active = true;
     }
 
-    const member = await updateMember(id, patch);
+    const member = await updateMember(tenantId, id, patch);
     res.json(member);
   }),
 );
 
 adminRouter.delete(
-  '/api/admin/members/:id',
+  '/api/admin/t/:tenantId/members/:id',
   wrap(async (req: AdminRequest, res) => {
-    if (req.isOwner !== true) {
-      throw forbidden('Only the owner can remove providers.', 'owner_only');
-    }
+    assertOwner(req);
+    const tenantId = req.tenantId!;
     const id = req.params.id;
-    const existing = await loadMember(id);
+    const existing = await loadMember(tenantId, id);
     if (!existing) throw notFound('Provider not found', 'no_member');
+    if (existing.role === 'owner') {
+      throw conflict('The practice owner cannot be removed.', 'cannot_delete_owner');
+    }
     if (req.adminEmail && existing.email === req.adminEmail) {
       throw conflict('You cannot remove yourself.', 'cannot_delete_self');
     }
     // Refuse to orphan event types — never silently drop clinical config.
-    const refs = await db
-      .collection(COL.eventTypes)
+    const refs = await tenantDb(tenantId)
+      .eventTypes()
       .where('memberIds', 'array-contains', id)
       .limit(1)
       .get();
@@ -339,25 +396,19 @@ adminRouter.delete(
         'member_in_use',
       );
     }
-    await deleteMember(id);
+    await deleteMember(tenantId, id);
     res.json({ ok: true });
   }),
 );
 
 // ---- Per-member Google connections ----
 
-/** Throws unless the caller may manage Google connections for this member. */
-function assertCanManageMember(req: AdminRequest, memberId: string): void {
-  if (req.isOwner === true) return;
-  if (req.memberId === memberId) return;
-  throw forbidden('You can only manage your own Google account.', 'forbidden');
-}
-
 adminRouter.get(
-  '/api/admin/members/:id/google/auth-url',
+  '/api/admin/t/:tenantId/members/:id/google/auth-url',
   wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const memberId = req.params.id;
-    const member = await loadMember(memberId);
+    const member = await loadMember(tenantId, memberId);
     if (!member) throw notFound('Provider not found', 'no_member');
     assertCanManageMember(req, memberId);
 
@@ -371,22 +422,23 @@ adminRouter.get(
     }
     const state = randomToken(18);
     await db
-      .collection(COL.oauthStates)
+      .collection(ROOT.oauthStates)
       .doc(state)
-      .set({ adminUid: req.uid ?? null, memberId, createdAt: new Date().toISOString() });
+      .set({ adminUid: req.uid ?? null, tenantId, memberId, createdAt: new Date().toISOString() });
     const client = makeOAuthClient(clientId, clientSecret, resolveRedirectUri(req));
     res.json({ url: buildConsentUrl(client, state) });
   }),
 );
 
 adminRouter.get(
-  '/api/admin/members/:id/connections',
+  '/api/admin/t/:tenantId/members/:id/connections',
   wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const memberId = req.params.id;
-    const member = await loadMember(memberId);
+    const member = await loadMember(tenantId, memberId);
     if (!member) throw notFound('Provider not found', 'no_member');
-    assertCanManageMember(req, memberId); // self-scope: owner or the member themself
-    const conns = await loadConnections(memberId);
+    assertCanManageMember(req, memberId);
+    const conns = await loadConnections(tenantId, memberId);
     res.json({
       connections: conns.map((c) => publicConnection(c, member)), // refreshToken STRIPPED
       writeConnectionId: member.writeConnectionId ?? null,
@@ -396,14 +448,15 @@ adminRouter.get(
 );
 
 adminRouter.post(
-  '/api/admin/members/:id/connections/:connId/refresh',
+  '/api/admin/t/:tenantId/members/:id/connections/:connId/refresh',
   wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const memberId = req.params.id;
     const connIdParam = req.params.connId;
-    const member = await loadMember(memberId);
+    const member = await loadMember(tenantId, memberId);
     if (!member) throw notFound('Provider not found', 'no_member');
     assertCanManageMember(req, memberId);
-    const conn = await loadConnection(memberId, connIdParam);
+    const conn = await loadConnection(tenantId, memberId, connIdParam);
     if (!conn) throw notFound('Connection not found', 'no_connection');
 
     const clientId = safeValue(GOOGLE_CLIENT_ID);
@@ -418,14 +471,12 @@ adminRouter.post(
       calendars = await listCalendars(oauth);
     } catch (err) {
       if (isInvalidGrant(err)) {
-        await setConnectionStatus(memberId, connIdParam, 'revoked');
+        await setConnectionStatus(tenantId, memberId, connIdParam, 'revoked');
         throw conflict('This Google account needs to be reconnected.', 'connection_revoked');
       }
       throw err;
     }
-    // Re-list refreshes the cached calendar list while preserving prior `selected`
-    // choices (upsertConnection merges by calendarId).
-    const updated = await upsertConnection(memberId, {
+    const updated = await upsertConnection(tenantId, memberId, {
       accountEmail: conn.accountEmail,
       refreshToken: conn.refreshToken,
       scope: conn.scope,
@@ -442,14 +493,15 @@ const selectionsSchema = z.object({
 });
 
 adminRouter.patch(
-  '/api/admin/members/:id/connections/:connId/calendars',
+  '/api/admin/t/:tenantId/members/:id/connections/:connId/calendars',
   wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const memberId = req.params.id;
     const connIdParam = req.params.connId;
-    const member = await loadMember(memberId);
+    const member = await loadMember(tenantId, memberId);
     if (!member) throw notFound('Provider not found', 'no_member');
     assertCanManageMember(req, memberId);
-    const conn = await loadConnection(memberId, connIdParam);
+    const conn = await loadConnection(tenantId, memberId, connIdParam);
     if (!conn) throw notFound('Connection not found', 'no_connection');
 
     const parsed = selectionsSchema.safeParse(req.body);
@@ -465,7 +517,7 @@ adminRouter.patch(
     const calendars = conn.calendars.map((c) =>
       wanted.has(c.calendarId) ? { ...c, selected: !!wanted.get(c.calendarId) } : c,
     );
-    await setConnectionCalendars(memberId, connIdParam, calendars);
+    await setConnectionCalendars(tenantId, memberId, connIdParam, calendars);
     res.json({ calendars });
   }),
 );
@@ -476,10 +528,11 @@ const writeTargetSchema = z.object({
 });
 
 adminRouter.put(
-  '/api/admin/members/:id/write-target',
+  '/api/admin/t/:tenantId/members/:id/write-target',
   wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const memberId = req.params.id;
-    const member = await loadMember(memberId);
+    const member = await loadMember(tenantId, memberId);
     if (!member) throw notFound('Provider not found', 'no_member');
     assertCanManageMember(req, memberId);
 
@@ -487,7 +540,7 @@ adminRouter.put(
     if (!parsed.success) throw badRequest('Invalid write target.', 'invalid_body');
     const { connectionId, calendarId } = parsed.data;
 
-    const conn = await loadConnection(memberId, connectionId);
+    const conn = await loadConnection(tenantId, memberId, connectionId);
     if (!conn || conn.status !== 'active') {
       throw badRequest('That connection is not active.', 'no_connection');
     }
@@ -496,20 +549,24 @@ adminRouter.put(
     if (!cal.writable) {
       throw badRequest('That calendar is read-only and cannot host events.', 'calendar_not_writable');
     }
-    await updateMember(memberId, { writeConnectionId: connectionId, writeCalendarId: calendarId });
+    await updateMember(tenantId, memberId, {
+      writeConnectionId: connectionId,
+      writeCalendarId: calendarId,
+    });
     res.json({ writeConnectionId: connectionId, writeCalendarId: calendarId });
   }),
 );
 
 adminRouter.delete(
-  '/api/admin/members/:id/connections/:connId',
+  '/api/admin/t/:tenantId/members/:id/connections/:connId',
   wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const memberId = req.params.id;
     const connIdParam = req.params.connId;
-    const member = await loadMember(memberId);
+    const member = await loadMember(tenantId, memberId);
     if (!member) throw notFound('Provider not found', 'no_member');
     assertCanManageMember(req, memberId);
-    const conn = await loadConnection(memberId, connIdParam);
+    const conn = await loadConnection(tenantId, memberId, connIdParam);
     if (!conn) throw notFound('Connection not found', 'no_connection');
 
     // Best-effort token revoke (ignore failures), then drop the connection doc.
@@ -523,7 +580,7 @@ adminRouter.delete(
         /* ignore — local delete is the source of truth */
       }
     }
-    await deleteConnection(memberId, connIdParam);
+    await deleteConnection(tenantId, memberId, connIdParam);
     res.json({ ok: true });
   }),
 );
@@ -538,9 +595,9 @@ function isInvalidGrant(err: unknown): boolean {
 
 // ---- Event types ----
 adminRouter.get(
-  '/api/admin/event-types',
-  wrap(async (_req, res) => {
-    const q = await db.collection(COL.eventTypes).get();
+  '/api/admin/t/:tenantId/event-types',
+  wrap(async (req: AdminRequest, res) => {
+    const q = await tenantDb(req.tenantId!).eventTypes().get();
     const types = q.docs
       .map((d) => ({ id: d.id, ...d.data() }) as EventType)
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
@@ -549,14 +606,15 @@ adminRouter.get(
 );
 
 adminRouter.post(
-  '/api/admin/event-types',
-  wrap(async (req, res) => {
+  '/api/admin/t/:tenantId/event-types',
+  wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
     const parsed = eventTypeSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid event type.', 'invalid_body');
     const data = parsed.data;
-    const slug = await ensureUniqueSlug(data.slug || data.name);
+    const slug = await ensureUniqueSlug(tenantId, data.slug || data.name);
     const now = new Date().toISOString();
-    const ref = db.collection(COL.eventTypes).doc();
+    const ref = tenantDb(tenantId).eventTypes().doc();
     const doc: EventType = { ...data, id: ref.id, slug, createdAt: now, updatedAt: now };
     await ref.set(doc);
     res.status(201).json(doc);
@@ -564,14 +622,15 @@ adminRouter.post(
 );
 
 adminRouter.put(
-  '/api/admin/event-types/:id',
-  wrap(async (req, res) => {
-    const ref = db.collection(COL.eventTypes).doc(req.params.id);
+  '/api/admin/t/:tenantId/event-types/:id',
+  wrap(async (req: AdminRequest, res) => {
+    const tenantId = req.tenantId!;
+    const ref = tenantDb(tenantId).eventTypes().doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) throw notFound('Event type not found', 'no_event_type');
     const parsed = eventTypeSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid event type.', 'invalid_body');
-    const slug = await ensureUniqueSlug(parsed.data.slug || parsed.data.name, req.params.id);
+    const slug = await ensureUniqueSlug(tenantId, parsed.data.slug || parsed.data.name, req.params.id);
     const updated: EventType = {
       ...parsed.data,
       id: req.params.id,
@@ -585,32 +644,32 @@ adminRouter.put(
 );
 
 adminRouter.delete(
-  '/api/admin/event-types/:id',
-  wrap(async (req, res) => {
-    await db.collection(COL.eventTypes).doc(req.params.id).delete();
+  '/api/admin/t/:tenantId/event-types/:id',
+  wrap(async (req: AdminRequest, res) => {
+    await tenantDb(req.tenantId!).eventTypes().doc(req.params.id).delete();
     res.json({ ok: true });
   }),
 );
 
 // ---- Availability schedules ----
 adminRouter.get(
-  '/api/admin/schedules',
-  wrap(async (_req, res) => {
-    const q = await db.collection(COL.schedules).get();
+  '/api/admin/t/:tenantId/schedules',
+  wrap(async (req: AdminRequest, res) => {
+    const q = await tenantDb(req.tenantId!).schedules().get();
     const schedules = q.docs.map((d) => ({ id: d.id, ...d.data() }) as AvailabilitySchedule);
     res.json({ schedules });
   }),
 );
 
 adminRouter.post(
-  '/api/admin/schedules',
-  wrap(async (req, res) => {
+  '/api/admin/t/:tenantId/schedules',
+  wrap(async (req: AdminRequest, res) => {
     const parsed = scheduleSchema.safeParse(req.body);
     if (!parsed.success || !validTz(parsed.data.timezone)) {
       throw badRequest('Invalid schedule.', 'invalid_body');
     }
     const now = new Date().toISOString();
-    const ref = db.collection(COL.schedules).doc();
+    const ref = tenantDb(req.tenantId!).schedules().doc();
     const doc: AvailabilitySchedule = {
       ...parsed.data,
       id: ref.id,
@@ -623,9 +682,9 @@ adminRouter.post(
 );
 
 adminRouter.put(
-  '/api/admin/schedules/:id',
-  wrap(async (req, res) => {
-    const ref = db.collection(COL.schedules).doc(req.params.id);
+  '/api/admin/t/:tenantId/schedules/:id',
+  wrap(async (req: AdminRequest, res) => {
+    const ref = tenantDb(req.tenantId!).schedules().doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) throw notFound('Schedule not found', 'no_schedule');
     const parsed = scheduleSchema.safeParse(req.body);
@@ -644,21 +703,18 @@ adminRouter.put(
 );
 
 adminRouter.delete(
-  '/api/admin/schedules/:id',
-  wrap(async (req, res) => {
-    await db.collection(COL.schedules).doc(req.params.id).delete();
+  '/api/admin/t/:tenantId/schedules/:id',
+  wrap(async (req: AdminRequest, res) => {
+    await tenantDb(req.tenantId!).schedules().doc(req.params.id).delete();
     res.json({ ok: true });
   }),
 );
 
 // ---- Bookings (admin view) ----
 adminRouter.get(
-  '/api/admin/bookings',
-  wrap(async (req, res) => {
-    // Bounds MUST be canonical UTC "…Z" strings to match stored startUtc
-    // (which is always new Date(ms).toISOString()); Luxon's toISO() emits a
-    // "+00:00" suffix that breaks the lexical === chronological invariant the
-    // Firestore range query relies on.
+  '/api/admin/t/:tenantId/bookings',
+  wrap(async (req: AdminRequest, res) => {
+    // Bounds MUST be canonical UTC "…Z" strings to match stored startUtc.
     const from =
       typeof req.query.from === 'string' && DATE_RE.test(req.query.from)
         ? new Date(DateTime.fromISO(req.query.from, { zone: 'utc' }).toMillis()).toISOString()
@@ -669,8 +725,8 @@ adminRouter.get(
             DateTime.fromISO(req.query.to, { zone: 'utc' }).plus({ days: 1 }).toMillis(),
           ).toISOString()
         : new Date(Date.now() + 60 * 86_400_000).toISOString();
-    const q = await db
-      .collection(COL.bookings)
+    const q = await tenantDb(req.tenantId!)
+      .bookings()
       .where('startUtc', '>=', from)
       .where('startUtc', '<', to)
       .orderBy('startUtc', 'asc')
@@ -680,70 +736,22 @@ adminRouter.get(
   }),
 );
 
-// ---- Branding ----
+// ---- Branding (folded into the tenant doc) ----
 adminRouter.get(
-  '/api/admin/branding',
-  wrap(async (_req, res) => {
-    res.json(await loadBranding());
+  '/api/admin/t/:tenantId/branding',
+  wrap(async (req: AdminRequest, res) => {
+    res.json(await loadBranding(req.tenantId!));
   }),
 );
 
 adminRouter.put(
-  '/api/admin/branding',
-  wrap(async (req, res) => {
+  '/api/admin/t/:tenantId/branding',
+  wrap(async (req: AdminRequest, res) => {
     const parsed = brandingSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid branding.', 'invalid_body');
     if (parsed.data.timezone && !validTz(parsed.data.timezone)) {
       throw badRequest('Invalid timezone.', 'bad_timezone');
     }
-    res.json(await saveBranding(parsed.data));
-  }),
-);
-
-// ---- Google connection status / disconnect (LEGACY single-provider) ----
-// @deprecated v2 connects per member under /admin/members/:id/google/* — kept so
-// the single-token `private/google` fallback keeps working through migration.
-adminRouter.get(
-  '/api/admin/google/status',
-  wrap(async (req: AdminRequest, res) => {
-    if (req.isOwner !== true) throw forbidden('Owner only.', 'owner_only');
-    const tokens = await loadGoogleTokens();
-    res.json({
-      connected: !!tokens?.refreshToken,
-      email: tokens?.connectedEmail ?? null,
-      calendarId: tokens?.calendarId ?? 'primary',
-    });
-  }),
-);
-
-adminRouter.get(
-  '/api/admin/google/auth-url',
-  wrap(async (req: AdminRequest, res) => {
-    if (req.isOwner !== true) throw forbidden('Owner only.', 'owner_only');
-    const clientId = safeValue(GOOGLE_CLIENT_ID);
-    const clientSecret = safeValue(GOOGLE_CLIENT_SECRET);
-    if (!clientId || !clientSecret) {
-      throw badRequest(
-        'Google OAuth is not configured. Set the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET secrets.',
-        'google_unconfigured',
-      );
-    }
-    const state = randomToken(18);
-    await db
-      .collection(COL.oauthStates)
-      .doc(state)
-      .set({ adminUid: req.uid ?? null, createdAt: new Date().toISOString() });
-    const client = makeOAuthClient(clientId, clientSecret, resolveRedirectUri(req));
-    res.json({ url: buildConsentUrl(client, state) });
-  }),
-);
-
-adminRouter.post(
-  '/api/admin/google/disconnect',
-  wrap(async (req: AdminRequest, res) => {
-    if (req.isOwner !== true) throw forbidden('Owner only.', 'owner_only');
-    const { clearGoogleTokens } = await import('../google/oauth');
-    await clearGoogleTokens();
-    res.json({ ok: true });
+    res.json(await saveBranding(req.tenantId!, parsed.data));
   }),
 );

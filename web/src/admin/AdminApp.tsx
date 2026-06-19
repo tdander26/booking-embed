@@ -10,6 +10,7 @@ import { CalendarDays, Clock, ListChecks, Settings, LogOut, Users, Code } from '
 import { getFirebaseAuth } from '../lib/firebase';
 import * as api from '../api/client';
 import { ApiError } from '../api/client';
+import { applyBrand, applyTheme } from '../lib/brand';
 import type { AdminMe } from '../api/types';
 import { Spinner, Button, Banner, Card } from '../components/ui';
 import { EventTypesTab } from './EventTypesTab';
@@ -53,7 +54,7 @@ function GoogleMark() {
   );
 }
 
-export function AdminApp() {
+export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
   const auth = getFirebaseAuth();
   const [user, setUser] = useState<User | null | undefined>(undefined);
   const [adminOk, setAdminOk] = useState<boolean | null>(null);
@@ -70,7 +71,11 @@ export function AdminApp() {
     }
     api
       .adminGetBranding()
-      .then(() => setAdminOk(true))
+      .then((b) => {
+        applyTheme(b.theme);
+        applyBrand(b.brandColor);
+        setAdminOk(true);
+      })
       .catch((e: ApiError) => setAdminOk(e.status === 403 ? false : true));
   }, [user]);
 
@@ -105,8 +110,8 @@ export function AdminApp() {
       {adminOk === false ? (
         <Card className="p-6">
           <Banner kind="error">
-            {user.email} is signed in but isn't an admin yet. Ask Dr. Anderson to add you as a
-            provider with admin access, then sign out and back in.
+            {user.email} is signed in but isn't an admin of this practice. Ask the practice owner
+            to add you as a provider with admin access, then sign out and back in.
           </Banner>
         </Card>
       ) : (
@@ -123,7 +128,7 @@ export function AdminApp() {
                     'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition',
                     active
                       ? 'bg-surface-3 text-ink shadow-sm ring-1 ring-hair'
-                      : 'text-muted hover:text-ink hover:bg-white/5',
+                      : 'text-muted hover:text-ink hover:bg-overlay',
                   ].join(' ')}
                 >
                   <Icon size={16} className={active ? 'text-brand' : ''} /> {t.label}
@@ -136,7 +141,7 @@ export function AdminApp() {
           {tab === 'eventTypes' && <EventTypesTab />}
           {tab === 'providers' && <ProvidersTab me={me} />}
           {tab === 'schedules' && <SchedulesTab />}
-          {tab === 'embed' && <EmbedTab />}
+          {tab === 'embed' && <EmbedTab tenantSlug={tenantSlug} />}
           {tab === 'settings' && <SettingsTab />}
         </>
       )}
@@ -174,7 +179,7 @@ function SignIn() {
             <Banner kind="error">{err}</Banner>
           </div>
         )}
-        <Button variant="outline" onClick={signIn} disabled={busy} className="w-full bg-white/[0.03]">
+        <Button variant="outline" onClick={signIn} disabled={busy} className="w-full bg-overlay-soft">
           <GoogleMark /> {busy ? 'Opening Google…' : 'Continue with Google'}
         </Button>
       </Card>

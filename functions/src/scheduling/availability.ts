@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { db, COL } from '../firebase';
+import { tenantDb } from '../firebase';
 import {
   slotsForDay,
   filterSlots,
@@ -7,12 +7,9 @@ import {
   type Interval,
   type Window,
 } from './slots';
-import {
-  getCalendarProvider,
-  getMemberCalendar,
-  memberBusyForMember,
-} from '../calendar/provider';
+import { getMemberCalendar, memberBusyForMember } from '../calendar/provider';
 import { loadMember } from '../members';
+import { ownerMemberId } from '../tenants';
 import { notFound } from '../util/http';
 import type {
   EventType,
@@ -25,26 +22,30 @@ import type {
 } from '../types';
 
 const MAX_RANGE_DAYS = 62; // bound work per request (≈ two months)
-const DEFAULT_MEMBER_ID = 'mbr_todd'; // legacy single-provider fallback
 
-export async function loadEventTypeById(id: string): Promise<EventType | null> {
-  const snap = await db.collection(COL.eventTypes).doc(id).get();
+export async function loadEventTypeById(
+  tenantId: string,
+  id: string,
+): Promise<EventType | null> {
+  const snap = await tenantDb(tenantId).eventTypes().doc(id).get();
   return snap.exists ? ({ id: snap.id, ...snap.data() } as EventType) : null;
 }
 
-export async function loadEventTypeBySlug(slug: string): Promise<EventType | null> {
-  const q = await db
-    .collection(COL.eventTypes)
-    .where('slug', '==', slug)
-    .limit(1)
-    .get();
+export async function loadEventTypeBySlug(
+  tenantId: string,
+  slug: string,
+): Promise<EventType | null> {
+  const q = await tenantDb(tenantId).eventTypes().where('slug', '==', slug).limit(1).get();
   if (q.empty) return null;
   const d = q.docs[0];
   return { id: d.id, ...d.data() } as EventType;
 }
 
-export async function loadSchedule(id: string): Promise<AvailabilitySchedule> {
-  const snap = await db.collection(COL.schedules).doc(id).get();
+export async function loadSchedule(
+  tenantId: string,
+  id: string,
+): Promise<AvailabilitySchedule> {
+  const snap = await tenantDb(tenantId).schedules().doc(id).get();
   if (!snap.exists) throw notFound('Availability schedule not found', 'no_schedule');
   return { id: snap.id, ...snap.data() } as AvailabilitySchedule;
 }
@@ -77,26 +78,27 @@ function windowsForDay(
 
 /**
  * Resolve which availability schedule to use for a request:
- *  - member-aware: the member's `defaultScheduleId`,
+ *  - the member's `defaultScheduleId`,
  *  - legacy fallback: `eventType.availabilityScheduleId` (single-provider docs).
  */
 async function resolveSchedule(
+  tenantId: string,
   eventType: EventType,
   member: Member | null,
 ): Promise<AvailabilitySchedule> {
   const scheduleId = member?.defaultScheduleId || eventType.availabilityScheduleId;
   if (!scheduleId) throw notFound('Availability schedule not found', 'no_schedule');
-  return loadSchedule(scheduleId);
+  return loadSchedule(tenantId, scheduleId);
 }
 
 /**
- * Member-aware availability. When `memberId` is supplied we resolve that member,
- * use their default schedule + their connected (selected) calendars' busy times,
- * and count only THAT member's own bookings as busy. When `memberId` is absent
- * we keep the exact legacy single-provider behavior (global Google provider +
- * eventType.availabilityScheduleId + all confirmed bookings).
+ * Tenant- and member-aware availability. We always resolve an effective member
+ * (the requested `memberId`, or the tenant's owner for provider-less legacy
+ * types), use that member's default schedule + their connected (selected)
+ * calendars' busy times, and count only THAT member's own bookings as busy.
  */
 export async function computeAvailability(params: {
+  tenantId: string;
   eventType: EventType;
   memberId?: string;
   fromDate: string; // "yyyy-MM-dd" (invitee-facing range start)
@@ -104,23 +106,19 @@ export async function computeAvailability(params: {
   inviteeTz: string;
   nowUtc?: number;
 }): Promise<AvailabilityResponse> {
-  const { eventType, inviteeTz } = params;
+  const { tenantId, eventType, inviteeTz } = params;
   const now = params.nowUtc ?? Date.now();
-  const memberAware = !!params.memberId;
-  const member = memberAware ? await loadMember(params.memberId!) : null;
 
-  const schedule = await resolveSchedule(eventType, member);
+  // Always resolve a concrete provider: explicit member, else the tenant owner.
+  const effectiveMemberId = params.memberId ?? (await ownerMemberId(tenantId));
+  const member = await loadMember(tenantId, effectiveMemberId);
+
+  const schedule = await resolveSchedule(tenantId, eventType, member);
   const scheduleZone = schedule.timezone;
-
-  // Own-busy is ALWAYS scoped to a member so the read path matches the write
-  // path (createBooking re-checks as mbr_todd in legacy mode). Without this, a
-  // provider-less (legacy) type would count every provider's bookings as busy
-  // and over-block the owner's real openings.
-  const ownBusyMemberId = memberAware ? (params.memberId ?? DEFAULT_MEMBER_ID) : DEFAULT_MEMBER_ID;
 
   const emptyResponse = (): AvailabilityResponse => ({
     eventTypeId: eventType.id,
-    memberId: memberAware ? params.memberId : undefined,
+    memberId: params.memberId,
     timezone: inviteeTz,
     durationMinutes: eventType.durationMinutes,
     days: [],
@@ -180,30 +178,21 @@ export async function computeAvailability(params: {
   const fromIso = new Date(lookbackMs).toISOString();
   const toIso = new Date(rangeEndMs).toISOString();
 
-  // Busy = calendar free/busy + this member's own confirmed bookings.
-  // Member-aware: union every selected calendar across the member's connections
-  // (memberBusy) and filter own bookings to the member. Legacy: global provider
-  // free/busy + all confirmed bookings (unchanged behavior).
-  let calendarBusy: Interval[];
-  if (memberAware) {
-    const rc = await getMemberCalendar(params.memberId!);
-    calendarBusy = await memberBusyForMember(
-      params.memberId!,
-      rc,
-      fromIso,
-      toIso,
-    ).catch(() => [] as Interval[]);
-  } else {
-    const { provider, calendarId } = await getCalendarProvider();
-    calendarBusy = await provider
-      .getBusy(calendarId, fromIso, toIso)
-      .catch(() => [] as Interval[]);
-  }
+  // Busy = calendar free/busy (union of the member's selected calendars across
+  // their active connections) + this member's own confirmed bookings.
+  const rc = await getMemberCalendar(tenantId, effectiveMemberId);
+  const calendarBusy = await memberBusyForMember(
+    tenantId,
+    effectiveMemberId,
+    rc,
+    fromIso,
+    toIso,
+  ).catch(() => [] as Interval[]);
 
   const [ownBusy, dayCounts] = await Promise.all([
-    loadOwnBusy(fromIso, toIso, ownBusyMemberId),
+    loadOwnBusy(tenantId, fromIso, toIso, effectiveMemberId),
     eventType.dailyBookingLimit
-      ? loadDayCounts(fromIso, toIso, scheduleZone, ownBusyMemberId)
+      ? loadDayCounts(tenantId, fromIso, toIso, scheduleZone, effectiveMemberId)
       : Promise.resolve(new Map<string, number>()),
   ]);
   const busy = [...calendarBusy, ...ownBusy];
@@ -247,7 +236,7 @@ export async function computeAvailability(params: {
 
   return {
     eventTypeId: eventType.id,
-    memberId: memberAware ? params.memberId : undefined,
+    memberId: params.memberId,
     timezone: inviteeTz,
     durationMinutes: eventType.durationMinutes,
     days: outDays,
@@ -262,6 +251,7 @@ export async function computeAvailability(params: {
  * dead-ends the whole provider list.
  */
 export async function nextAvailableForMember(
+  tenantId: string,
   eventType: EventType,
   memberId: string,
   tz: string,
@@ -284,6 +274,7 @@ export async function nextAvailableForMember(
       const fromDt = start.plus({ days: offset });
       const toDt = start.plus({ days: Math.min(offset + CHUNK - 1, horizonDays) });
       const avail = await computeAvailability({
+        tenantId,
         eventType,
         memberId,
         fromDate: fromDt.toFormat('yyyy-MM-dd'),
@@ -309,19 +300,18 @@ export async function nextAvailableForMember(
 }
 
 /**
- * Confirmed bookings overlapping [fromIso, toIso) as busy intervals. When
- * `memberId` is non-null we keep ONLY that member's bookings (legacy docs with
- * no memberId resolve to the owner). The query stays `(status, startUtc)` and we
- * filter member in memory — this avoids requiring a new composite index and
- * tolerates not-yet-backfilled legacy docs during the rollout window.
+ * Confirmed bookings for `memberId` overlapping [fromIso, toIso) as busy
+ * intervals. The query stays `(status, startUtc)` and we filter member in
+ * memory — avoids requiring a new composite index.
  */
 async function loadOwnBusy(
+  tenantId: string,
   fromIso: string,
   toIso: string,
-  memberId: string | null,
+  memberId: string,
 ): Promise<Interval[]> {
-  const q = await db
-    .collection(COL.bookings)
+  const q = await tenantDb(tenantId)
+    .bookings()
     .where('status', '==', 'confirmed')
     .where('startUtc', '>=', fromIso)
     .where('startUtc', '<', toIso)
@@ -329,7 +319,7 @@ async function loadOwnBusy(
   const out: Interval[] = [];
   for (const d of q.docs) {
     const b = d.data() as Booking;
-    if (memberId !== null && (b.memberId ?? DEFAULT_MEMBER_ID) !== memberId) continue;
+    if (b.memberId !== memberId) continue;
     out.push({
       start: DateTime.fromISO(b.startUtc).toMillis(),
       end: DateTime.fromISO(b.endUtc).toMillis(),
@@ -338,16 +328,16 @@ async function loadOwnBusy(
   return out;
 }
 
-/** Count confirmed bookings per schedule-tz day, for the daily cap. Filtered to
- * `memberId` (in memory) when supplied so the cap is per-provider-per-day. */
+/** Count confirmed bookings per schedule-tz day for `memberId`, for the daily cap. */
 async function loadDayCounts(
+  tenantId: string,
   fromIso: string,
   toIso: string,
   zone: string,
-  memberId: string | null,
+  memberId: string,
 ): Promise<Map<string, number>> {
-  const q = await db
-    .collection(COL.bookings)
+  const q = await tenantDb(tenantId)
+    .bookings()
     .where('status', '==', 'confirmed')
     .where('startUtc', '>=', fromIso)
     .where('startUtc', '<', toIso)
@@ -355,7 +345,7 @@ async function loadDayCounts(
   const counts = new Map<string, number>();
   for (const d of q.docs) {
     const b = d.data() as Booking;
-    if (memberId !== null && (b.memberId ?? DEFAULT_MEMBER_ID) !== memberId) continue;
+    if (b.memberId !== memberId) continue;
     const key = DateTime.fromISO(b.startUtc).setZone(zone).toFormat('yyyy-MM-dd');
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }

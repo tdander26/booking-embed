@@ -1,10 +1,9 @@
 import { Router, type Request } from 'express';
 import { logger } from 'firebase-functions';
-import { db, COL } from '../firebase';
+import { db, ROOT } from '../firebase';
 import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } from '../config';
 import {
   makeOAuthClient,
-  saveGoogleTokens,
   fetchAccountEmail,
   listCalendars,
   GOOGLE_SCOPES,
@@ -38,7 +37,11 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 oauthRouter.get(
   '/api/google/callback',
   wrap(async (req, res) => {
-    const redirectBack = (status: string) => res.redirect(`/admin?google=${status}`);
+    // Until the tenant is known (state read), errors go to the default admin.
+    const redirectBack = (status: string, tenant?: string) => {
+      const base = tenant ? `/${encodeURIComponent(tenant)}/admin` : '/admin';
+      res.redirect(`${base}?google=${status}`);
+    };
     const code = req.query.code;
     const state = req.query.state;
     if (typeof code !== 'string' || typeof state !== 'string') {
@@ -46,7 +49,7 @@ oauthRouter.get(
       return;
     }
 
-    const stateRef = db.collection(COL.oauthStates).doc(state);
+    const stateRef = db.collection(ROOT.oauthStates).doc(state);
     const snap = await stateRef.get();
     await stateRef.delete().catch(() => undefined); // single-use
     if (!snap.exists) {
@@ -58,15 +61,20 @@ oauthRouter.get(
       redirectBack('expired');
       return;
     }
-    // v2: a per-member connect flow stamps the member id into the state doc. When
-    // present we write a multi-account connection; when absent we keep the legacy
-    // single-token path so the live single-provider site never breaks mid-rollout.
+    // The connect flow stamps tenantId + memberId into the state doc; both are
+    // required. The connection binds to the state's tenant+member REGARDLESS of
+    // which Google account actually consents.
+    const tenantId = snap.data()?.tenantId as string | undefined;
     const memberId = snap.data()?.memberId as string | undefined;
+    if (!tenantId || !memberId) {
+      redirectBack('error', tenantId);
+      return;
+    }
 
     const clientId = safeValue(GOOGLE_CLIENT_ID);
     const clientSecret = safeValue(GOOGLE_CLIENT_SECRET);
     if (!clientId || !clientSecret) {
-      redirectBack('unconfigured');
+      redirectBack('unconfigured', tenantId);
       return;
     }
 
@@ -75,39 +83,27 @@ oauthRouter.get(
       const { tokens } = await client.getToken(code);
       if (!tokens.refresh_token) {
         // Happens if the user previously consented without prompt=consent.
-        redirectBack('norefresh');
+        redirectBack('norefresh', tenantId);
         return;
       }
 
-      if (!memberId) {
-        // LEGACY path unchanged — keeps the live single-provider site working.
-        await saveGoogleTokens({
-          refreshToken: tokens.refresh_token,
-          calendarId: 'primary',
-          scope: tokens.scope ?? GOOGLE_SCOPES.join(' '),
-          updatedAt: new Date().toISOString(),
-        });
-        redirectBack('connected');
-        return;
-      }
-
-      // NEW per-member multi-account path. Bind a fresh OAuth client to the
-      // account's refresh token, discover its identity + calendar list, then
-      // upsert the connection under members/{memberId}/connections/{connId}.
+      // Bind a fresh OAuth client to the account's refresh token, discover its
+      // identity + calendar list, then upsert the connection under
+      // tenants/{tenantId}/members/{memberId}/connections/{connId}.
       const oauth = makeOAuthClient(clientId, clientSecret, resolveRedirectUri(req));
       oauth.setCredentials({ refresh_token: tokens.refresh_token });
       const accountEmail = await fetchAccountEmail(oauth);
       const calendars = await listCalendars(oauth);
-      await upsertConnection(memberId, {
+      await upsertConnection(tenantId, memberId, {
         accountEmail,
         refreshToken: tokens.refresh_token,
         scope: tokens.scope ?? GOOGLE_SCOPES.join(' '),
         calendars,
       });
-      redirectBack(`connected&member=${encodeURIComponent(memberId)}`);
+      redirectBack(`connected&member=${encodeURIComponent(memberId)}`, tenantId);
     } catch (err) {
       logger.error('Google OAuth callback failed');
-      redirectBack('error');
+      redirectBack('error', tenantId);
     }
   }),
 );

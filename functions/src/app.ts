@@ -3,6 +3,7 @@ import cors from 'cors';
 import { publicRouter } from './http/publicApi';
 import { adminRouter } from './http/adminApi';
 import { oauthRouter } from './http/oauthRoutes';
+import { signupRouter } from './http/signup';
 import { errorHandler } from './util/http';
 
 export function buildApp(): express.Express {
@@ -18,8 +19,9 @@ export function buildApp(): express.Express {
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
   app.use(oauthRouter); // public OAuth callback
+  app.use(signupRouter); // self-serve onboarding + platform code minting
   app.use(publicRouter); // public booking endpoints
-  app.use(adminRouter); // /api/admin/* (auth-gated inside the router)
+  app.use(adminRouter); // /api/admin/t/:tenantId/* (auth-gated inside the router)
 
   app.use((_req, res) => res.status(404).json({ error: 'not_found' }));
   app.use(errorHandler);

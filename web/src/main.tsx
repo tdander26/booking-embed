@@ -8,6 +8,11 @@ import '@fontsource/inter/600.css';
 import './styles.css';
 import { App } from './App';
 import { isEmbedded } from './lib/embed';
+import { resolveRoute } from './lib/tenant';
+import { setTenant } from './api/client';
+
+// Resolve the tenant from the URL path ONCE, before any API call fires.
+setTenant(resolveRoute().tenantSlug);
 
 if (isEmbedded()) document.body.classList.add('embed');
 

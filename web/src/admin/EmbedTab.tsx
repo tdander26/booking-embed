@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Copy, Code } from 'lucide-react';
 import * as api from '../api/client';
 import type { EventType, Member } from '../api/types';
@@ -18,7 +18,7 @@ const KIND_HINT: Record<SnippetKind, string> = {
   popup: 'Turn any link into a booking modal trigger.',
 };
 
-export function EmbedTab() {
+export function EmbedTab({ tenantSlug }: { tenantSlug: string }) {
   const [types, setTypes] = useState<EventType[] | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -57,8 +57,9 @@ export function EmbedTab() {
     const q = new URLSearchParams();
     if (slug) q.set('type', slug);
     if (showProvider && providerId) q.set('provider', providerId);
-    return `${origin}/?${q.toString()}`;
-  }, [origin, slug, providerId, showProvider]);
+    // Path-based tenant routing: /{tenantSlug}/?type=…
+    return `${origin}/${tenantSlug}/?${q.toString()}`;
+  }, [origin, tenantSlug, slug, providerId, showProvider]);
 
   const embedSrc = `${origin}/embed.js`;
   // Live preview loads the real booking page in embed (transparent) mode.
@@ -67,7 +68,7 @@ export function EmbedTab() {
   const snippets: Record<SnippetKind, string> = useMemo(
     () => ({
       inline: `<!-- Booking widget (inline) -->
-<div class="booking-inline" data-url="${bookingUrl}" style="min-width:320px;height:640px;"></div>
+<div class="booking-inline" data-url="${bookingUrl}" style="min-width:320px;min-height:640px;"></div>
 <script src="${embedSrc}" async></script>`,
       floating: `<!-- Booking widget (floating button) -->
 <script src="${embedSrc}"></script>
@@ -204,27 +205,42 @@ export function EmbedTab() {
   );
 }
 
+/** Inline preview that auto-grows to the booking page's content height via the
+ * same `booking.resize` postMessage a real embed uses — so the preview never
+ * shows an internal scrollbar. */
+function InlinePreviewFrame({ url }: { url: string }) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(640);
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data as { event?: string; payload?: { height?: number } } | null;
+      if (!d || d.event !== 'booking.resize' || typeof d.payload?.height !== 'number') return;
+      if (ref.current && e.source === ref.current.contentWindow) {
+        setHeight(Math.max(360, Math.ceil(d.payload.height)));
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+  return (
+    <div className="overflow-hidden rounded-xl border border-hair-soft">
+      <iframe ref={ref} title="Booking preview" src={url} className="w-full" style={{ border: 0, height }} />
+    </div>
+  );
+}
+
 function PreviewCard({ kind, url }: { kind: SnippetKind; url: string }) {
   return (
     <Card className="p-5">
       <h3 className="mb-3 text-sm font-semibold text-ink">Live preview</h3>
-      {kind === 'inline' && (
-        <div className="overflow-hidden rounded-xl border border-hair-soft">
-          <iframe
-            title="Booking preview"
-            src={url}
-            className="h-[560px] w-full"
-            style={{ border: 0 }}
-          />
-        </div>
-      )}
+      {kind === 'inline' && <InlinePreviewFrame url={url} />}
 
       {kind === 'floating' && (
         <div className="relative h-72 overflow-hidden rounded-xl border border-hair-soft bg-surface-2">
           <div className="space-y-2 p-5">
-            <div className="h-3 w-2/3 rounded bg-white/5" />
-            <div className="h-3 w-1/2 rounded bg-white/5" />
-            <div className="h-3 w-3/4 rounded bg-white/5" />
+            <div className="h-3 w-2/3 rounded bg-overlay" />
+            <div className="h-3 w-1/2 rounded bg-overlay" />
+            <div className="h-3 w-3/4 rounded bg-overlay" />
             <div className="text-xs text-faint">…your page content…</div>
           </div>
           <button
@@ -298,7 +314,7 @@ function SnippetCard({ kind, code }: { kind: SnippetKind; code: string }) {
         </div>
         <button
           onClick={copy}
-          className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-hair px-3 text-sm font-medium text-ink transition hover:border-brand/60 hover:bg-white/[0.03]"
+          className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-hair px-3 text-sm font-medium text-ink transition hover:border-brand/60 hover:bg-overlay-soft"
         >
           {copied ? <Check size={15} className="text-brand" /> : <Copy size={15} />}
           {copied ? 'Copied' : 'Copy'}

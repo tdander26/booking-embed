@@ -59,7 +59,7 @@ export function BookingsTab() {
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-ink">{b.invitee.name}</span>
                 {b.status === 'cancelled' && (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-muted">
+                  <span className="rounded bg-overlay px-1.5 py-0.5 text-xs text-muted">
                     cancelled
                   </span>
                 )}

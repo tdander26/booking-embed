@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { Check, Video, CalendarPlus, Download } from 'lucide-react';
-import type { BookingConfirmation, LocationType } from '../api/types';
+import type { BookingConfirmation, LocationType, PublicBranding } from '../api/types';
 import { fmtFull } from '../lib/time';
 import { postScheduled } from '../lib/embed';
+import { fireBookingConversion } from '../lib/ads';
 import { googleCalUrl, icsDataUrl } from '../lib/calendarLinks';
 import { Button } from '../components/ui';
 
@@ -19,10 +20,25 @@ function locationText(loc: BookingConfirmation['location']): string {
   }
 }
 
-export function Confirmed({ confirmation }: { confirmation: BookingConfirmation }) {
+export function Confirmed({
+  confirmation,
+  branding,
+}: {
+  confirmation: BookingConfirmation;
+  branding: PublicBranding | null;
+}) {
   useEffect(() => {
+    // Notify the host page (embed) so its own GTM/Ads tag can fire a conversion…
     postScheduled(confirmation.bookingId, confirmation.startUtc);
-  }, [confirmation.bookingId, confirmation.startUtc]);
+    // …and fire the clinic's Google Ads conversion directly on the non-embedded
+    // booking page.
+    if (branding) {
+      fireBookingConversion({
+        adsConversionId: branding.adsConversionId,
+        adsConversionLabel: branding.adsConversionLabel,
+      });
+    }
+  }, [confirmation.bookingId, confirmation.startUtc, branding]);
 
   const hostName = confirmation.providerName ?? confirmation.displayName;
 

@@ -12,6 +12,8 @@ export type QuestionType =
   | 'checkboxes'
   | 'checkbox';
 
+export type ThemeMode = 'dark' | 'light' | 'auto';
+
 export interface PublicBranding {
   displayName: string;
   tagline: string;
@@ -19,6 +21,13 @@ export interface PublicBranding {
   brandColor: string;
   welcomeText: string;
   timezone: string;
+  theme?: ThemeMode;
+  // Google Ads conversion config (public; fired client-side on the confirmation
+  // screen). Each clinic enters their own values in admin Settings.
+  adsConversionId?: string;
+  adsConversionLabel?: string;
+  // Admin-only (returned by /admin/branding, omitted from the public endpoint).
+  emailFrom?: string;
 }
 
 export interface IntakeQuestion {
@@ -218,14 +227,11 @@ export interface AdminBooking {
   cancelToken: string;
 }
 
+export type AdminRole = 'platform' | 'owner' | 'admin';
+
 export interface AdminMe {
   email: string;
-  isOwner: boolean;
+  tenantId: string;
+  role: AdminRole;
   memberId: string | null;
-}
-
-export interface GoogleStatus {
-  connected: boolean;
-  email: string | null;
-  calendarId: string;
 }

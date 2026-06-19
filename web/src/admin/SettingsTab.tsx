@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Users } from 'lucide-react';
 import * as api from '../api/client';
-import type { PublicBranding } from '../api/types';
+import type { PublicBranding, ThemeMode } from '../api/types';
 import { timezoneOptions } from '../lib/time';
+import { applyTheme } from '../lib/brand';
 import { Spinner, Banner, Button, Card, Field, inputClass } from '../components/ui';
 import { ImageUpload } from '../components/ImageUpload';
 
@@ -93,6 +94,21 @@ function BrandingPanel() {
             onChange={(e) => set({ brandColor: e.target.value })}
           />
         </Field>
+        <Field label="Theme" hint="Color scheme of your booking page. “Auto” follows the visitor's device.">
+          <select
+            className={inputClass}
+            value={b.theme ?? 'dark'}
+            onChange={(e) => {
+              const theme = e.target.value as ThemeMode;
+              set({ theme });
+              applyTheme(theme); // live preview in the admin
+            }}
+          >
+            <option value="dark">Dark (default)</option>
+            <option value="light">Light</option>
+            <option value="auto">Auto (match device)</option>
+          </select>
+        </Field>
         <div className="sm:col-span-2">
           <ImageUpload
             label="Logo"
@@ -112,6 +128,47 @@ function BrandingPanel() {
               onChange={(e) => set({ welcomeText: e.target.value })}
             />
           </Field>
+        </div>
+        <div className="sm:col-span-2">
+          <Field
+            label="Sender email (optional)"
+            hint="From address on confirmation & reminder emails, e.g. Clinic <bookings@yourdomain.com>. Requires a verified sending domain."
+          >
+            <input
+              className={inputClass}
+              value={b.emailFrom ?? ''}
+              placeholder="Your Clinic <bookings@yourdomain.com>"
+              onChange={(e) => set({ emailFrom: e.target.value })}
+            />
+          </Field>
+        </div>
+        <div className="sm:col-span-2 border-t border-hair-soft pt-4">
+          <h3 className="mb-1 text-sm font-semibold text-ink">
+            Track appointment bookings as a Google Ads conversion
+          </h3>
+          <p className="mb-3 text-xs text-faint">
+            When a patient finishes booking, a conversion is reported to your own Google Ads
+            account. Leave blank to turn this off. (When the widget is embedded on your site, your
+            site's own Google&nbsp;Ads/GTM tag can also fire off the booking event.)
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Conversion ID" hint="From Google Ads, e.g. AW-123456789">
+              <input
+                className={inputClass}
+                value={b.adsConversionId ?? ''}
+                placeholder="AW-XXXXXXXXX"
+                onChange={(e) => set({ adsConversionId: e.target.value })}
+              />
+            </Field>
+            <Field label="Conversion label" hint="The conversion action's label">
+              <input
+                className={inputClass}
+                value={b.adsConversionLabel ?? ''}
+                placeholder="abCdEf…"
+                onChange={(e) => set({ adsConversionLabel: e.target.value })}
+              />
+            </Field>
+          </div>
         </div>
       </div>
       <div className="mt-4 flex items-center gap-3">

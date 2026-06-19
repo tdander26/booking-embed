@@ -1,7 +1,7 @@
 import { google, type calendar_v3 } from 'googleapis';
 import { logger } from 'firebase-functions';
 import { DateTime } from 'luxon';
-import { makeOAuthClient, saveGoogleTokens, loadGoogleTokens } from '../google/oauth';
+import { makeOAuthClient } from '../google/oauth';
 import { randomUUID } from '../util/ids';
 import type { Interval } from '../scheduling/slots';
 import type {
@@ -25,20 +25,9 @@ export class GoogleCalendarProvider implements CalendarProvider {
       opts.redirectUri,
     );
     oauth.setCredentials({ refresh_token: opts.refreshToken });
-    // Persist a rotated refresh token if Google ever issues one.
-    oauth.on('tokens', (t) => {
-      if (t.refresh_token) {
-        void loadGoogleTokens().then((cur) => {
-          if (cur) {
-            void saveGoogleTokens({
-              ...cur,
-              refreshToken: t.refresh_token!,
-              updatedAt: new Date().toISOString(),
-            });
-          }
-        });
-      }
-    });
+    // Refresh tokens are stored per-connection; Google rarely rotates them, and
+    // if a token goes invalid the availability layer flips the connection to
+    // `revoked` (prompting a reconnect), so we don't persist rotations here.
     this.calendar = google.calendar({ version: 'v3', auth: oauth });
   }
 

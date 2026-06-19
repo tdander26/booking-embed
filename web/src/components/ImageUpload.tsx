@@ -81,7 +81,7 @@ export function ImageUpload({
   const preview =
     shape === 'round'
       ? 'h-16 w-16 rounded-full object-cover'
-      : 'h-16 w-28 rounded-lg object-contain bg-white/5';
+      : 'h-16 w-28 rounded-lg object-contain bg-overlay';
 
   return (
     <div>
