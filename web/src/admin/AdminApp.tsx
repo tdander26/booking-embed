@@ -6,7 +6,7 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import { CalendarDays, Clock, ListChecks, Settings, LogOut, Users, Code } from 'lucide-react';
+import { CalendarDays, Clock, ListChecks, Settings, LogOut, Users, Code, KeyRound } from 'lucide-react';
 import { getFirebaseAuth } from '../lib/firebase';
 import * as api from '../api/client';
 import { ApiError } from '../api/client';
@@ -19,8 +19,9 @@ import { SchedulesTab } from './SchedulesTab';
 import { BookingsTab } from './BookingsTab';
 import { EmbedTab } from './EmbedTab';
 import { SettingsTab } from './SettingsTab';
+import { PlatformTab } from './PlatformTab';
 
-type Tab = 'bookings' | 'eventTypes' | 'providers' | 'schedules' | 'embed' | 'settings';
+type Tab = 'bookings' | 'eventTypes' | 'providers' | 'schedules' | 'embed' | 'settings' | 'platform';
 
 const TABS: { key: Tab; label: string; icon: typeof Clock }[] = [
   { key: 'bookings', label: 'Bookings', icon: ListChecks },
@@ -95,6 +96,12 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
     );
   if (!user) return <SignIn />;
 
+  // The platform owner gets an extra tab to mint self-serve signup access codes.
+  const tabs =
+    me?.role === 'platform'
+      ? [...TABS, { key: 'platform' as Tab, label: 'Platform', icon: KeyRound }]
+      : TABS;
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
       <header className="mb-7 flex items-center justify-between">
@@ -117,7 +124,7 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
       ) : (
         <>
           <nav className="mb-6 flex gap-1 overflow-x-auto rounded-xl border border-hair-soft bg-surface p-1">
-            {TABS.map((t) => {
+            {tabs.map((t) => {
               const Icon = t.icon;
               const active = tab === t.key;
               return (
@@ -143,6 +150,7 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
           {tab === 'schedules' && <SchedulesTab />}
           {tab === 'embed' && <EmbedTab tenantSlug={tenantSlug} />}
           {tab === 'settings' && <SettingsTab />}
+          {tab === 'platform' && <PlatformTab />}
         </>
       )}
     </div>
