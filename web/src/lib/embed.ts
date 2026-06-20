@@ -40,16 +40,42 @@ export function useEmbedResize(active: boolean): void {
   useEffect(() => {
     if (!active || window.self === window.top) return;
     const target = parentTarget();
+    let last = 0;
     const post = () => {
-      const height = Math.ceil(document.documentElement.scrollHeight);
-      window.parent.postMessage({ event: 'booking.resize', payload: { height } }, target);
+      // scrollHeight reflects true content height even when a wrapper is clipped;
+      // take the max across the document so step/question changes are captured.
+      const height = Math.ceil(
+        Math.max(
+          document.documentElement.scrollHeight,
+          document.body?.scrollHeight ?? 0,
+          document.body?.offsetHeight ?? 0,
+        ),
+      );
+      if (height && height !== last) {
+        last = height;
+        window.parent.postMessage({ event: 'booking.resize', payload: { height } }, target);
+      }
     };
+    // ResizeObserver fires on box-size changes; MutationObserver covers content
+    // swaps (navigating steps, rendering questions, showing errors) that don't
+    // necessarily resize an observed box. Both funnel through the deduped post().
     const ro = new ResizeObserver(post);
     ro.observe(document.documentElement);
+    if (document.body) ro.observe(document.body);
+    const mo = new MutationObserver(post);
+    if (document.body) {
+      mo.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+      });
+    }
     window.addEventListener('load', post);
     post();
     return () => {
       ro.disconnect();
+      mo.disconnect();
       window.removeEventListener('load', post);
     };
   }, [active]);
