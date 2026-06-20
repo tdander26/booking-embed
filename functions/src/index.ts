@@ -4,6 +4,10 @@ import { REGION, ALL_SECRETS } from './config';
 import { buildApp } from './app';
 import { runReminders } from './scheduled/reminders';
 
+// Secret-rebind marker: bump to force a redeploy after rotating a secret
+// (e.g. RESEND_API_KEY), since Firebase skips deploys when only secret versions
+// change. rev: 1
+
 // Single HTTP function behind the Firebase Hosting rewrite `/api/** -> api`.
 // Same-origin for both the booking page and the embedded iframe, so the public
 // flow needs no CORS; Express still reflects CORS for any direct cross-origin
