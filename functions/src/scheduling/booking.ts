@@ -93,6 +93,11 @@ export async function createBooking(
     throw notFound('Event type not found', 'no_event_type');
   }
 
+  // A phone consult must capture a number to call.
+  if (eventType.location.type === 'phone' && !req.phone?.trim()) {
+    throw badRequest('A phone number is required for a phone consult.', 'phone_required');
+  }
+
   // Resolve the provider (or legacy owner). Member-aware from here on.
   const { memberId, member } = await resolveMember(tenantId, eventType, req);
   const memberName = member?.name;

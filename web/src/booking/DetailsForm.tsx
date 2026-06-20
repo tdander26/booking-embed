@@ -32,12 +32,17 @@ export function DetailsForm({
   const hasQuestions = questions.length > 0;
   // Legacy free-text notes box only when there are no custom questions.
   const showNotes = eventType.collectNotes && !hasQuestions;
+  // A phone consult must capture a number to call; otherwise phone is optional
+  // (reminders only). Show the field for either case.
+  const phoneRequired = eventType.location.type === 'phone';
+  const showPhone = eventType.collectPhone || phoneRequired;
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [notes, setNotes] = useState('');
+  const [noteOpen, setNoteOpen] = useState(false);
   const [answers, setAnswers] = useState<Record<string, AnswerValue>>(() => {
     const init: Record<string, AnswerValue> = {};
     questions.forEach((q) => {
@@ -63,6 +68,11 @@ export function DetailsForm({
     if (!firstName.trim()) fe.__first = 'Please enter your first name.';
     if (!lastName.trim()) fe.__last = 'Please enter your last name.';
     if (!email.trim()) fe.__email = 'Please enter your email.';
+    if (phoneRequired) {
+      const digits = phone.replace(/\D/g, '').length;
+      if (!phone.trim()) fe.__phone = 'Please enter your phone number.';
+      else if (digits < 7) fe.__phone = 'Please enter a valid phone number.';
+    }
     for (const q of questions) {
       const msg = validateAnswer(q, answers[q.id] ?? emptyAnswer(q));
       if (msg) fe[q.id] = msg;
@@ -85,7 +95,7 @@ export function DetailsForm({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         email: email.trim(),
-        phone: eventType.collectPhone ? phone.trim() || undefined : undefined,
+        phone: showPhone ? phone.trim() || undefined : undefined,
         notes: showNotes ? notes.trim() || undefined : undefined,
         answers: hasQuestions ? answers : undefined,
         source: embedded ? 'embed' : 'web',
@@ -119,8 +129,8 @@ export function DetailsForm({
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4" noValidate>
-      <div className="flex items-start gap-3 rounded-xl border border-hair-soft bg-surface-2 p-4 text-sm">
+    <form onSubmit={submit} className="space-y-3" noValidate>
+      <div className="flex items-start gap-3 rounded-xl border border-hair-soft bg-surface-2 p-3 text-sm">
         <Calendar size={18} className="mt-0.5 text-brand" />
         <div>
           <div className="font-display text-base font-semibold text-ink">{eventType.name}</div>
@@ -132,7 +142,7 @@ export function DetailsForm({
 
       {err && <Banner kind="error">{err}</Banner>}
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3">
         <Field label="First name" required>
           <input
             className={inputClass}
@@ -177,8 +187,12 @@ export function DetailsForm({
           <span className="mt-1 block text-xs text-red-300">{fieldErrors.__email}</span>
         )}
       </Field>
-      {eventType.collectPhone && (
-        <Field label="Phone" hint="For appointment reminders.">
+      {showPhone && (
+        <Field
+          label="Phone"
+          required={phoneRequired}
+          hint={phoneRequired ? 'We’ll call you at this number.' : 'For appointment reminders.'}
+        >
           <input
             className={inputClass}
             type="tel"
@@ -186,8 +200,14 @@ export function DetailsForm({
             autoComplete="tel"
             placeholder="(555) 123-4567"
             value={phone}
-            onChange={(e) => setPhone(formatPhone(e.target.value))}
+            onChange={(e) => {
+              setPhone(formatPhone(e.target.value));
+              setFieldErrors((fe) => ({ ...fe, __phone: '' }));
+            }}
           />
+          {fieldErrors.__phone && (
+            <span className="mt-1 block text-xs text-red-300">{fieldErrors.__phone}</span>
+          )}
         </Field>
       )}
 
@@ -201,16 +221,26 @@ export function DetailsForm({
         />
       ))}
 
-      {showNotes && (
-        <Field label="Anything you'd like to share?" hint="Optional">
-          <textarea
-            className={`${inputClass} min-h-[84px] resize-y`}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            maxLength={2000}
-          />
-        </Field>
-      )}
+      {showNotes &&
+        (noteOpen ? (
+          <Field label="Anything you'd like to share?" hint="Optional">
+            <textarea
+              className={`${inputClass} min-h-[60px] resize-y`}
+              value={notes}
+              autoFocus
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={2000}
+            />
+          </Field>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setNoteOpen(true)}
+            className="text-sm text-muted transition hover:text-brand"
+          >
+            + Add a note (optional)
+          </button>
+        ))}
 
       <Button type="submit" disabled={submitting} className="w-full">
         {submitting ? 'Booking…' : 'Confirm booking'}
