@@ -123,7 +123,7 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
         </Card>
       ) : (
         <>
-          <nav className="mb-6 flex gap-1 overflow-x-auto rounded-xl border border-hair-soft bg-surface p-1">
+          <nav className="mb-6 flex gap-1 rounded-xl border border-hair-soft bg-surface p-1">
             {tabs.map((t) => {
               const Icon = t.icon;
               const active = tab === t.key;
@@ -131,14 +131,17 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
                 <button
                   key={t.key}
                   onClick={() => setTab(t.key)}
+                  title={t.label}
+                  aria-label={t.label}
                   className={[
-                    'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition',
+                    'inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition sm:flex-none sm:justify-start sm:px-4',
                     active
                       ? 'bg-surface-3 text-ink shadow-sm ring-1 ring-hair'
                       : 'text-muted hover:text-ink hover:bg-overlay',
                   ].join(' ')}
                 >
-                  <Icon size={16} className={active ? 'text-brand' : ''} /> {t.label}
+                  <Icon size={16} className={active ? 'text-brand' : ''} />
+                  <span className="hidden sm:inline">{t.label}</span>
                 </button>
               );
             })}
