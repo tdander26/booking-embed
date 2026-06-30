@@ -63,6 +63,7 @@ export async function sendBookingConfirmation(
       html,
       text,
       from: branding.emailFrom,
+      tenantId,
       idempotencyKey: `confirm/${booking.id}`,
     });
   });
@@ -78,6 +79,7 @@ export async function sendBookingConfirmation(
         html,
         text,
         from: branding.emailFrom,
+        tenantId,
         idempotencyKey: `confirm-provider/${booking.id}`,
       });
     });
@@ -98,6 +100,7 @@ export async function sendBookingReminder(
       html,
       text,
       from: branding.emailFrom,
+      tenantId,
       idempotencyKey: `reminder/${booking.id}/${minutesBefore}`,
     });
     if (booking.invitee.phone) {
@@ -131,6 +134,7 @@ export async function sendBookingCancellation(
       html,
       text,
       from: branding.emailFrom,
+      tenantId,
       idempotencyKey: `cancel/${booking.id}`,
     });
   });
@@ -145,6 +149,7 @@ export async function sendBookingCancellation(
         html,
         text,
         from: branding.emailFrom,
+        tenantId,
         idempotencyKey: `cancel-provider/${booking.id}`,
       });
     });

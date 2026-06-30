@@ -66,6 +66,15 @@ function BrandingPanel() {
   if (!b) return <Spinner />;
   const set = (patch: Partial<PublicBranding>) => setB({ ...b, ...patch });
 
+  // Practice-wide reminder default. Absent => the built-in [1440, 60] (24h + 1h).
+  const reminders = b.defaultRemindersMinutesBefore ?? [1440, 60];
+  const toggleReminder = (min: number, on: boolean) => {
+    const next = new Set(reminders);
+    if (on) next.add(min);
+    else next.delete(min);
+    set({ defaultRemindersMinutesBefore: [...next].sort((x, y) => y - x) });
+  };
+
   return (
     <Card className="p-5">
       <h2 className="mb-3 text-base font-semibold text-ink">Branding</h2>
@@ -141,6 +150,36 @@ function BrandingPanel() {
               onChange={(e) => set({ emailFrom: e.target.value })}
             />
           </Field>
+        </div>
+        <div className="sm:col-span-2 border-t border-hair-soft pt-4">
+          <h3 className="mb-1 text-sm font-semibold text-ink">Appointment reminders</h3>
+          <p className="mb-3 text-xs text-faint">
+            Reminder emails sent to patients before each appointment. Applies to event types set
+            to “Use practice default.” Fewer reminders means fewer emails.
+          </p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={reminders.includes(1440)}
+                onChange={(e) => toggleReminder(1440, e.target.checked)}
+              />
+              Email a reminder 24 hours before
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={reminders.includes(60)}
+                onChange={(e) => toggleReminder(60, e.target.checked)}
+              />
+              Email a reminder 1 hour before
+            </label>
+            {reminders.length === 0 && (
+              <p className="text-xs text-faint">
+                No reminder emails will be sent — patients still get the booking confirmation.
+              </p>
+            )}
+          </div>
         </div>
         <div className="sm:col-span-2 border-t border-hair-soft pt-4">
           <h3 className="mb-1 text-sm font-semibold text-ink">

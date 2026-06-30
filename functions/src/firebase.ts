@@ -28,6 +28,7 @@ export const ROOT = {
   tenants: 'tenants',
   oauthStates: 'oauthStates', // short-lived OAuth state; carries tenantId in the doc
   signupCodes: 'signupCodes', // hashed access codes
+  emailUsage: 'emailUsage', // platform-wide email-send tallies (one doc per UTC month)
 } as const;
 
 /** Subcollection under members/{memberId} holding server-only Google connections. */

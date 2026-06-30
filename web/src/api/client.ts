@@ -306,3 +306,16 @@ export const platformMintCode = (body: {
     '/api/platform/signup-codes',
     { method: 'POST', body: JSON.stringify(body) },
   );
+
+// ---- Platform owner: email-usage meter (Resend quota) ----
+export interface EmailUsageView {
+  month: string; // UTC 'YYYY-MM'
+  day: string; // UTC 'YYYY-MM-DD' (today)
+  total: number; // emails sent this month
+  today: number; // emails sent today (UTC)
+  byType: Record<string, number>;
+  byDay: Record<string, number>;
+  byTenant: Record<string, number>;
+  limits: { perDay: number; perMonth: number };
+}
+export const platformEmailUsage = () => rawAuthed<EmailUsageView>('/api/platform/email-usage');

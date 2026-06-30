@@ -25,7 +25,7 @@ function emptyEventType(scheduleId: string): EventType {
     slotIntervalMinutes: 30,
     dailyBookingLimit: null,
     collectPhone: false,
-    remindersMinutesBefore: [1440, 60],
+    remindersMinutesBefore: null, // inherit the practice default
     sortOrder: 0,
   };
 }
@@ -56,13 +56,16 @@ export function EventTypesTab() {
     load();
   }, []);
 
-  const save = async () => {
-    if (!editing) return;
-    if (editing.memberIds.length === 0) {
+  // `override` carries any last-second edits the editor committed synchronously
+  // (e.g. a custom reminder CSV), so a Save click can't race an async setEditing.
+  const save = async (override?: EventType) => {
+    const e = override ?? editing;
+    if (!e) return;
+    if (e.memberIds.length === 0) {
       setErr('Assign at least one provider to this event type.');
       return;
     }
-    const qErr = validateQuestions(editing.questions);
+    const qErr = validateQuestions(e.questions);
     if (qErr) {
       setErr(qErr);
       return;
@@ -70,12 +73,12 @@ export function EventTypesTab() {
     setBusy(true);
     setErr(null);
     try {
-      if (editing.id) await api.adminUpdateEventType(editing.id, editing);
-      else await api.adminCreateEventType(editing);
+      if (e.id) await api.adminUpdateEventType(e.id, e);
+      else await api.adminCreateEventType(e);
       setEditing(null);
       load();
-    } catch (e) {
-      setErr((e as Error).message);
+    } catch (err) {
+      setErr((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -182,13 +185,16 @@ function EventTypeEditor({
   schedules: AvailabilitySchedule[];
   members: Member[];
   onChange: (e: EventType) => void;
-  onSave: () => void;
+  onSave: (override?: EventType) => void;
   onCancel: () => void;
   busy: boolean;
   err: string | null;
 }) {
   const set = (patch: Partial<EventType>) => onChange({ ...value, ...patch });
-  const [reminders, setReminders] = useState(value.remindersMinutesBefore.join(', '));
+  // null/absent remindersMinutesBefore => this type inherits the practice default.
+  const [reminders, setReminders] = useState(
+    (value.remindersMinutesBefore ?? [1440, 60]).join(', '),
+  );
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const toggleMember = (id: string) => {
@@ -198,13 +204,21 @@ function EventTypeEditor({
     });
   };
 
-  const commitReminders = () => {
-    const parsed = reminders
+  const parseReminders = (s: string) =>
+    s
       .split(',')
-      .map((s) => parseInt(s.trim(), 10))
+      .map((x) => parseInt(x.trim(), 10))
       .filter((n) => Number.isFinite(n) && n >= 0)
       .slice(0, 5);
-    set({ remindersMinutesBefore: parsed });
+
+  // Returns the event type with reminders applied, so the Save handler can use
+  // the fresh value directly instead of racing the async onChange/setEditing.
+  const commitReminders = (): EventType => {
+    // In "use practice default" mode the value is null — never clobber it.
+    if (value.remindersMinutesBefore == null) return value;
+    const next = { ...value, remindersMinutesBefore: parseReminders(reminders) };
+    onChange(next);
+    return next;
   };
 
   return (
@@ -359,14 +373,37 @@ function EventTypeEditor({
           />
         </Field>
 
-        <Field label="Reminders (minutes before)" hint="Comma-separated, e.g. 1440, 60">
-          <input
+        <Field label="Reminders" hint="Reminder emails sent before the appointment.">
+          <select
             className={inputClass}
-            value={reminders}
-            onChange={(e) => setReminders(e.target.value)}
-            onBlur={commitReminders}
-          />
+            value={value.remindersMinutesBefore == null ? 'default' : 'custom'}
+            onChange={(e) => {
+              if (e.target.value === 'default') {
+                set({ remindersMinutesBefore: null });
+              } else {
+                const parsed = parseReminders(reminders);
+                if (parsed.length === 0) setReminders('1440, 60');
+                set({ remindersMinutesBefore: parsed.length ? parsed : [1440, 60] });
+              }
+            }}
+          >
+            <option value="default">Use practice default</option>
+            <option value="custom">Custom…</option>
+          </select>
         </Field>
+        {value.remindersMinutesBefore != null && (
+          <Field
+            label="Custom reminders (minutes before)"
+            hint="Comma-separated, e.g. 1440, 60. Leave blank for no reminders."
+          >
+            <input
+              className={inputClass}
+              value={reminders}
+              onChange={(e) => setReminders(e.target.value)}
+              onBlur={commitReminders}
+            />
+          </Field>
+        )}
         <Field label="Daily booking limit" hint="Blank = unlimited.">
           <input
             type="number"
@@ -440,13 +477,7 @@ function EventTypeEditor({
       </div>
 
       <div className="mt-5 flex gap-2">
-        <Button
-          onClick={() => {
-            commitReminders();
-            onSave();
-          }}
-          disabled={busy}
-        >
+        <Button onClick={() => onSave(commitReminders())} disabled={busy}>
           {busy ? 'Saving…' : 'Save event type'}
         </Button>
         <Button variant="ghost" onClick={onCancel}>

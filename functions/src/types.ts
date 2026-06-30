@@ -49,6 +49,10 @@ export interface Tenant {
   adsConversionId?: string; // e.g. "AW-123456789"
   adsConversionLabel?: string; // e.g. "abCdEf…" (the conversion action label)
   theme?: ThemeMode; // booking-page color theme (default 'dark')
+  /** Practice-wide default reminder schedule (minutes before the appointment).
+   * Inherited by event types whose own remindersMinutesBefore is null/absent.
+   * Absent => built-in default [1440, 60]; [] => no reminder emails. */
+  defaultRemindersMinutesBefore?: number[];
   createdAt: string;
   updatedAt: string;
 }
@@ -65,6 +69,9 @@ export interface Branding {
   adsConversionId?: string; // Google Ads conversion ID (AW-…), fired client-side
   adsConversionLabel?: string; // Google Ads conversion action label
   theme?: ThemeMode; // booking-page color theme (default 'dark')
+  /** Practice-wide default reminder schedule (minutes before). Inherited by
+   * event types set to "use practice default". Absent => [1440, 60]; [] => off. */
+  defaultRemindersMinutesBefore?: number[];
   updatedAt: string;
 }
 
@@ -191,7 +198,9 @@ export interface EventType {
   slotIntervalMinutes: number;
   dailyBookingLimit: number | null;
   collectPhone: boolean;
-  remindersMinutesBefore: number[];
+  /** Reminder schedule (minutes before). null/absent => inherit the practice
+   * default (tenant.defaultRemindersMinutesBefore); [] => no reminders. */
+  remindersMinutesBefore: number[] | null;
 
   sortOrder: number;
   createdAt: string;

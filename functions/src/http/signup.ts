@@ -4,6 +4,7 @@
  *   POST /api/signup                      public, needs a verified Google token
  *   POST /api/platform/signup-codes       platform owner only — mint a code
  *   GET  /api/platform/signup-codes       platform owner only — list (no raw codes)
+ *   GET  /api/platform/email-usage        platform owner only — Resend-quota meter
  *
  * A new practice is created atomically: the tenant doc (branding folded in), an
  * owner member (role:'owner'), a default Mon–Fri schedule, and a starter event
@@ -20,6 +21,7 @@ import { PLATFORM_OWNER_EMAIL, OWNER_EMAIL, SIGNUP_ACCESS_CODE } from '../config
 import { slugify, randomToken } from '../util/ids';
 import { wrap, badRequest, conflict, forbidden, unauthorized } from '../util/http';
 import { rateLimit } from '../util/ratelimit';
+import { loadEmailUsage } from '../email/usage';
 import type { Tenant, Member, AvailabilitySchedule, EventType, SignupCode } from '../types';
 
 export const signupRouter = Router();
@@ -239,7 +241,7 @@ signupRouter.post(
           slotIntervalMinutes: 30,
           dailyBookingLimit: null,
           collectPhone: true,
-          remindersMinutesBefore: [1440, 60],
+          remindersMinutesBefore: null, // inherit the practice default
           sortOrder: 0,
           createdAt: now,
           updatedAt: now,
@@ -310,5 +312,16 @@ signupRouter.get(
       };
     });
     res.json({ codes });
+  }),
+);
+
+// ---- GET /api/platform/email-usage ----
+// Platform-wide email volume for the current UTC month, against Resend's free
+// tier (100/day, 3,000/month) — the binding cost constraint as practices scale.
+signupRouter.get(
+  '/api/platform/email-usage',
+  wrap(async (req, res) => {
+    await requirePlatformOwner(req);
+    res.json(await loadEmailUsage());
   }),
 );

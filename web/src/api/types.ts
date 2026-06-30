@@ -28,6 +28,9 @@ export interface PublicBranding {
   adsConversionLabel?: string;
   // Admin-only (returned by /admin/branding, omitted from the public endpoint).
   emailFrom?: string;
+  // Admin-only: practice-wide default reminder schedule (minutes before).
+  // Inherited by event types set to "use practice default". [] => no reminders.
+  defaultRemindersMinutesBefore?: number[];
 }
 
 export interface IntakeQuestion {
@@ -165,7 +168,8 @@ export interface EventType {
   slotIntervalMinutes: number;
   dailyBookingLimit: number | null;
   collectPhone: boolean;
-  remindersMinutesBefore: number[];
+  // null/absent => inherit the practice default; [] => no reminders.
+  remindersMinutesBefore: number[] | null;
   sortOrder: number;
   createdAt?: string;
   updatedAt?: string;

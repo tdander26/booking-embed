@@ -16,7 +16,7 @@ import {
   sendBookingConfirmation,
   sendBookingCancellation,
 } from '../notify';
-import { loadBranding } from '../branding';
+import { loadBranding, DEFAULT_REMINDERS_MINUTES } from '../branding';
 import type {
   Booking,
   BookingAnswer,
@@ -161,9 +161,17 @@ export async function createBooking(
   const bookingId = bookingRef.id;
   const cancelToken = randomToken();
   const nowIso = new Date(nowMs).toISOString();
+  // Resolve the reminder schedule: an event type's own value wins; null/absent
+  // inherits the practice default; absent there falls back to the built-in.
+  // An explicit [] (event type or practice) means "no reminders" and is kept.
+  const branding = await loadBranding(tenantId);
+  const reminderMinutes =
+    eventType.remindersMinutesBefore ??
+    branding.defaultRemindersMinutesBefore ??
+    DEFAULT_REMINDERS_MINUTES;
   const { remindersRemaining, reminderDueUtc } = buildReminderSchedule(
     startMs,
-    eventType.remindersMinutesBefore ?? [],
+    reminderMinutes,
     nowMs,
   );
 
@@ -263,7 +271,7 @@ export async function createBooking(
   }
 
   // --- Side effects AFTER the transaction commits ------------------------
-  const branding = await loadBranding(tenantId);
+  // (branding was already loaded above to resolve the reminder schedule)
   const host = memberName ?? branding.displayName;
   const withMeet = eventType.location.type === 'google_meet';
   let meetUrl: string | undefined;

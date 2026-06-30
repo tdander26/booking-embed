@@ -200,7 +200,12 @@ const eventTypeSchema = z.object({
   slotIntervalMinutes: z.number().int().min(5).max(240).default(30),
   dailyBookingLimit: z.number().int().min(1).max(100).nullable().default(null),
   collectPhone: z.boolean().default(false),
-  remindersMinutesBefore: z.array(z.number().int().min(0).max(20_160)).max(5).default([1440, 60]),
+  // null => inherit the practice default (tenant.defaultRemindersMinutesBefore).
+  remindersMinutesBefore: z
+    .array(z.number().int().min(0).max(20_160))
+    .max(5)
+    .nullable()
+    .default(null),
   sortOrder: z.number().int().default(0),
 });
 
@@ -225,6 +230,11 @@ const brandingSchema = z.object({
   adsConversionId: z.string().max(40).optional(),
   adsConversionLabel: z.string().max(120).optional(),
   theme: z.enum(['dark', 'light', 'auto']).optional(),
+  // Practice-wide default reminder schedule (minutes before). [] => no reminders.
+  defaultRemindersMinutesBefore: z
+    .array(z.number().int().min(0).max(20_160))
+    .max(5)
+    .optional(),
 });
 
 const memberSchema = z.object({
