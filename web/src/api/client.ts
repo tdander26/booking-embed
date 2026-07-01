@@ -145,6 +145,12 @@ export const cancelBooking = (id: string, token: string, reason?: string) =>
     body: JSON.stringify({ token, reason }),
   });
 
+export const rescheduleBooking = (id: string, token: string, startUtc: string) =>
+  request<ManageView>(`/bookings/${encodeURIComponent(id)}/reschedule`, {
+    method: 'POST',
+    body: JSON.stringify({ token, startUtc }),
+  });
+
 // ---- Admin: identity ----
 export const adminMe = () => request<AdminMe>('/admin/me', { admin: true });
 

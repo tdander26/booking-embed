@@ -265,6 +265,7 @@ export interface Booking {
   createdAt: string;
   cancelledAt?: string;
   cancelReason?: string;
+  rescheduledAt?: string;
   source?: 'web' | 'embed';
 }
 

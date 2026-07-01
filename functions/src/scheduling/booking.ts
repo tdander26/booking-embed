@@ -15,6 +15,7 @@ import { badRequest, conflict, notFound, serverError } from '../util/http';
 import {
   sendBookingConfirmation,
   sendBookingCancellation,
+  sendBookingReschedule,
 } from '../notify';
 import { loadBranding, DEFAULT_REMINDERS_MINUTES } from '../branding';
 import type {
@@ -433,6 +434,225 @@ export async function cancelBooking(
   await sendBookingCancellation(tenantId, booking, branding).catch(() =>
     logger.error('Cancellation email failed', { bookingId }),
   );
+  return booking;
+}
+
+/**
+ * Move an existing booking to a new time. Mirrors createBooking's guarantees:
+ * re-validates the new slot for the member, atomically swaps the slot locks (and
+ * per-day counter if the day changed), then moves the calendar event (the
+ * provider has no update op, so we create the new event and delete the old) and
+ * emails the invitee. The DB is the source of truth; calendar/email are
+ * best-effort and flagged on failure.
+ */
+export async function rescheduleBooking(
+  tenantId: string,
+  bookingId: string,
+  token: string,
+  newStartUtc: string,
+  nowMs = Date.now(),
+): Promise<Booking> {
+  const booking = await loadBookingForManage(tenantId, bookingId, token);
+  if (booking.status === 'cancelled') {
+    throw conflict("This appointment was cancelled, so it can't be rescheduled.", 'already_cancelled');
+  }
+
+  const eventType = await loadEventTypeById(tenantId, booking.eventTypeId);
+  if (!eventType || !eventType.active) throw notFound('Event type not found', 'no_event_type');
+
+  const memberId = booking.memberId || (await ownerMemberId(tenantId));
+  const member = await loadMember(tenantId, memberId);
+  const inviteeTz = booking.invitee.timezone || 'utc';
+
+  const { ms: newStartMs, iso: newStartIso } = canonicalIso(newStartUtc);
+  if (newStartIso === booking.startUtc) return booking; // no-op
+  const newEndMs = newStartMs + booking.durationMinutes * 60_000;
+  const newEndIso = new Date(newEndMs).toISOString();
+
+  // The new instant must be an offered slot for THIS member right now.
+  const start = DateTime.fromMillis(newStartMs, { zone: 'utc' });
+  const avail = await computeAvailability({
+    tenantId,
+    eventType,
+    memberId,
+    fromDate: start.minus({ days: 1 }).toFormat('yyyy-MM-dd'),
+    toDate: start.plus({ days: 1 }).toFormat('yyyy-MM-dd'),
+    inviteeTz,
+    nowUtc: nowMs,
+  });
+  if (!new Set(avail.days.flatMap((d) => d.slots)).has(newStartIso)) {
+    throw conflict('That time is no longer available.', 'slot_unavailable');
+  }
+
+  const t = tenantDb(tenantId);
+
+  // Per-day cap counters, moved only if the booking crosses a day boundary
+  // (keyed in the member's schedule timezone, same as createBooking).
+  const dayCap = eventType.dailyBookingLimit;
+  let oldDayCounterRef: DocumentReference | undefined;
+  let newDayCounterRef: DocumentReference | undefined;
+  let dayChanged = false;
+  if (dayCap != null) {
+    const scheduleId = member?.defaultScheduleId || eventType.availabilityScheduleId;
+    const schedule = scheduleId ? await loadSchedule(tenantId, scheduleId) : null;
+    const zone = schedule?.timezone ?? 'utc';
+    const oldDayKey = DateTime.fromISO(booking.startUtc, { zone: 'utc' }).setZone(zone).toFormat('yyyy-MM-dd');
+    const newDayKey = DateTime.fromMillis(newStartMs, { zone }).toFormat('yyyy-MM-dd');
+    dayChanged = oldDayKey !== newDayKey;
+    if (dayChanged) {
+      oldDayCounterRef = t.dayCounters().doc(
+        booking.dayCounterId || `${sanitizeForDocId(memberId)}_${oldDayKey}`,
+      );
+      newDayCounterRef = t.dayCounters().doc(`${sanitizeForDocId(memberId)}_${newDayKey}`);
+    }
+  }
+
+  // Reminder schedule recomputed for the new time.
+  const branding = await loadBranding(tenantId);
+  const reminderMinutes =
+    eventType.remindersMinutesBefore ??
+    branding.defaultRemindersMinutesBefore ??
+    DEFAULT_REMINDERS_MINUTES;
+  const { remindersRemaining, reminderDueUtc } = buildReminderSchedule(newStartMs, reminderMinutes, nowMs);
+
+  // Atomic slot move: acquire the new cells we don't already hold, release the
+  // old cells we no longer need. Cells shared by old+new (overlapping move) stay.
+  const nowIso = new Date(nowMs).toISOString();
+  const newCells = coveredCells(newStartMs, newEndMs, BASE_GRID_MINUTES);
+  const newLockIds = newCells.map((c) => lockId(memberId, c));
+  const oldSet = new Set(booking.lockIds);
+  const newSet = new Set(newLockIds);
+  const toAcquire = newLockIds.filter((id) => !oldSet.has(id));
+  const toRelease = booking.lockIds.filter((id) => !newSet.has(id));
+
+  try {
+    await db.runTransaction(async (tx) => {
+      const acquireRefs = toAcquire.map((id) => t.slotLocks().doc(id));
+      const [snaps, newCounterSnap] = await Promise.all([
+        Promise.all(acquireRefs.map((r) => tx.get(r))),
+        newDayCounterRef ? tx.get(newDayCounterRef) : Promise.resolve(null),
+      ]);
+      if (snaps.some((s) => s.exists)) {
+        const e = new Error('SLOT_TAKEN');
+        (e as Error & { code?: string }).code = 'SLOT_TAKEN';
+        throw e;
+      }
+      if (dayCap != null && newDayCounterRef && ((newCounterSnap?.get('count') as number | undefined) ?? 0) >= dayCap) {
+        const e = new Error('DAY_FULL');
+        (e as Error & { code?: string }).code = 'DAY_FULL';
+        throw e;
+      }
+      acquireRefs.forEach((ref) =>
+        tx.create(ref, {
+          bookingId,
+          memberId,
+          eventTypeId: eventType.id,
+          startUtc: newStartIso,
+          endUtc: newEndIso,
+          createdAt: nowIso,
+        }),
+      );
+      toRelease.forEach((id) => tx.delete(t.slotLocks().doc(id)));
+      if (newDayCounterRef) tx.set(newDayCounterRef, { count: FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+      if (oldDayCounterRef) tx.set(oldDayCounterRef, { count: FieldValue.increment(-1) }, { merge: true });
+      tx.update(t.bookings().doc(bookingId), {
+        startUtc: newStartIso,
+        endUtc: newEndIso,
+        lockIds: newLockIds,
+        dayCounterId: dayChanged ? newDayCounterRef!.id : booking.dayCounterId ?? null,
+        reminderDueUtc,
+        remindersRemaining,
+        rescheduledAt: nowIso,
+      });
+    });
+  } catch (err) {
+    const code = (err as Error & { code?: string | number }).code;
+    if (code === 'SLOT_TAKEN' || code === 6 /* ALREADY_EXISTS */) {
+      throw conflict('That time was just booked by someone else.', 'slot_taken');
+    }
+    if (code === 'DAY_FULL') throw conflict('That day is fully booked.', 'day_full');
+    throw err;
+  }
+
+  // Reflect the move on the in-memory booking (email + calendar read from it).
+  const oldGoogleEventId = booking.googleEventId;
+  const oldCalendarRef = booking.calendarRef;
+  booking.startUtc = newStartIso;
+  booking.endUtc = newEndIso;
+  booking.lockIds = newLockIds;
+  if (dayChanged && newDayCounterRef) booking.dayCounterId = newDayCounterRef.id;
+  booking.reminderDueUtc = reminderDueUtc;
+  booking.remindersRemaining = remindersRemaining;
+  booking.rescheduledAt = nowIso;
+
+  // Move the calendar event: create the new one, then delete the old. (Provider
+  // has no update op.) Best-effort; DB stays authoritative.
+  const host = booking.memberName ?? branding.displayName;
+  const withMeet = booking.location.type === 'google_meet';
+  const rc = await getMemberCalendar(tenantId, memberId);
+  const writeProvider: CalendarProvider = rc.write?.provider ?? new MockCalendarProvider();
+  const writeCalendarId = rc.write?.calendarId ?? 'primary';
+  let newEventId: string | undefined;
+  let meetUrl: string | undefined;
+  try {
+    const created = await writeProvider.createEvent(writeCalendarId, {
+      summary: `${booking.eventTypeName} — ${booking.invitee.name}`,
+      description: buildEventDescription(booking, host),
+      startUtcIso: newStartIso,
+      endUtcIso: newEndIso,
+      attendeeEmail: booking.invitee.email,
+      attendeeName: booking.invitee.name,
+      withMeet,
+    });
+    newEventId = created.eventId;
+    meetUrl = created.meetUrl;
+  } catch (err) {
+    logger.error('Reschedule: creating the new calendar event failed', { bookingId });
+  }
+
+  // Delete the OLD event on the calendar it was written to.
+  if (oldGoogleEventId && !oldGoogleEventId.startsWith('mock_')) {
+    try {
+      let delProvider: CalendarProvider;
+      let delCalendarId: string;
+      if (oldCalendarRef?.connectionId) {
+        const conn = await getConnectionProvider(tenantId, memberId, oldCalendarRef.connectionId);
+        delProvider = conn.provider;
+        delCalendarId = oldCalendarRef.calendarId;
+      } else {
+        delProvider = writeProvider;
+        delCalendarId = writeCalendarId;
+      }
+      await delProvider.deleteEvent(delCalendarId, oldGoogleEventId);
+    } catch (err) {
+      logger.error('Reschedule: deleting the old calendar event failed', { bookingId });
+    }
+  }
+
+  const location = { ...booking.location, meetUrl };
+  const newCalendarRef = rc.write?.connectionId
+    ? { connectionId: rc.write.connectionId, calendarId: writeCalendarId }
+    : undefined;
+  const googleSyncError = !rc.write && !isEmulator()
+    ? 'no_write_calendar'
+    : !newEventId && !isEmulator()
+      ? 'reschedule_event_failed'
+      : undefined;
+  await t.bookings().doc(bookingId).update({
+    googleEventId: newEventId ?? null,
+    calendarRef: newCalendarRef ?? null,
+    location,
+    googleSyncError: googleSyncError ?? null,
+  });
+  booking.googleEventId = newEventId;
+  booking.calendarRef = newCalendarRef;
+  booking.location = location;
+  booking.googleSyncError = googleSyncError;
+
+  await sendBookingReschedule(tenantId, booking, branding).catch(() =>
+    logger.error('Reschedule email failed', { bookingId }),
+  );
+
   return booking;
 }
 

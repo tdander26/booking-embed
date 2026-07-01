@@ -111,7 +111,10 @@ export interface BookingConfirmation {
 export interface ManageView {
   bookingId: string;
   status: BookingStatus;
+  eventTypeId: string;
   eventTypeName: string;
+  memberId?: string;
+  providerName?: string;
   startUtc: string;
   endUtc: string;
   durationMinutes: number;

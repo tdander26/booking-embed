@@ -23,6 +23,9 @@ type Step = 'pick' | 'provider' | 'schedule' | 'details' | 'done';
 const params = new URLSearchParams(window.location.search);
 const slugParam = params.get('type');
 const providerParam = params.get('provider');
+// Optional exact-time deep link (e.g. from the site chat assistant): with a
+// matching `provider`, jump straight to the pre-filled details form.
+const startParam = params.get('start');
 
 /** featured-first, then sortOrder, then name (server should already do this; we
  * defend against an unsorted payload). */
@@ -83,7 +86,16 @@ export function BookingApp() {
       const match = ordered.find((p) => p.id === preferProviderId);
       if (match) {
         setProvider(match);
-        setStep('schedule');
+        // Exact-time deep link: skip the calendar and pre-fill the slot. If it
+        // was taken since, the confirm step shows a "slot taken" error and Back
+        // returns to this provider's calendar.
+        const startMs = startParam ? Date.parse(startParam) : NaN;
+        if (Number.isFinite(startMs)) {
+          setSlot({ iso: new Date(startMs).toISOString(), tz: zone });
+          setStep('details');
+        } else {
+          setStep('schedule');
+        }
         return;
       }
       // bad/inactive provider param → fall through to provider step
@@ -279,11 +291,6 @@ function Shell({ embedded, children }: { embedded: boolean; children: React.Reac
         <div className="h-px w-full [background:linear-gradient(90deg,transparent,var(--brand)_50%,transparent)]" />
         <div className="p-6 sm:p-8">{children}</div>
       </div>
-      {!embedded && (
-        <p className="mt-4 text-center text-xs text-faint">
-          Powered by your own scheduling — no Calendly fees.
-        </p>
-      )}
     </div>
   );
 }

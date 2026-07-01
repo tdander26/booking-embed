@@ -7,6 +7,7 @@ import {
   confirmationEmail,
   reminderEmail,
   cancellationEmail,
+  rescheduleEmail,
   providerNewBookingEmail,
   providerCancellationEmail,
 } from './email/templates';
@@ -84,6 +85,27 @@ export async function sendBookingConfirmation(
       });
     });
   }
+}
+
+export async function sendBookingReschedule(
+  tenantId: string,
+  booking: Booking,
+  branding: Branding,
+): Promise<void> {
+  // Keyed by the NEW start so each distinct reschedule sends exactly once (a
+  // retry to the same time is idempotent; a later move to another time fires).
+  await sendOnce(tenantId, booking.id, `reschedule:${booking.startUtc}`, async () => {
+    const { subject, html, text } = rescheduleEmail(booking, branding);
+    await sendEmail({
+      to: booking.invitee.email,
+      subject,
+      html,
+      text,
+      from: branding.emailFrom,
+      tenantId,
+      idempotencyKey: `reschedule/${booking.id}/${booking.startUtc}`,
+    });
+  });
 }
 
 export async function sendBookingReminder(
