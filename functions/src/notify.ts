@@ -22,7 +22,18 @@ async function providerContact(
   branding: Branding,
 ): Promise<{ email: string; tz: string } | null> {
   const member = await loadMember(tenantId, booking.memberId);
-  if (!member?.email) return null;
+  if (!member?.email) {
+    // A booking assigned to a provider with no member record or no email means
+    // that provider silently never hears about it. Surface it instead of skipping
+    // in the dark (see the "Anna never got notified" class of misconfiguration).
+    logger.warn('Provider notification skipped: no member email', {
+      tenantId,
+      bookingId: booking.id,
+      memberId: booking.memberId,
+      reason: member ? 'email_missing' : 'member_not_found',
+    });
+    return null;
+  }
   return { email: member.email, tz: member.timezone || branding.timezone };
 }
 

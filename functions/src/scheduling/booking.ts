@@ -322,7 +322,11 @@ export async function createBooking(
     await bookingRef.update({ confirmationSent: true });
     booking.confirmationSent = true;
   } catch (err) {
-    logger.error('Confirmation email failed', { bookingId });
+    logger.error('Confirmation email failed', {
+      bookingId,
+      memberId: booking.memberId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const confirmation: BookingConfirmation = {

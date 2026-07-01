@@ -48,7 +48,9 @@ export async function sendEmail(opts: {
     opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined,
   );
   if (error) {
-    throw new Error(`Resend send failed: ${error.name} — ${error.message}`);
+    // Include the recipient: a domain/verification restriction that lets the
+    // account owner through but rejects other providers is invisible otherwise.
+    throw new Error(`Resend send failed to ${opts.to}: ${error.name} — ${error.message}`);
   }
   // Meter only real, successful sends — these are what count against the Resend
   // quota. Best-effort; recordEmailSend never throws.
