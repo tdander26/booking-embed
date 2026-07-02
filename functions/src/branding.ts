@@ -6,6 +6,10 @@
 import { tenantRef } from './firebase';
 import type { Branding, ThemeMode } from './types';
 
+/** Built-in fallback reminder schedule (minutes before): 24 hours + 1 hour.
+ * Used when neither the event type nor the practice sets one. */
+export const DEFAULT_REMINDERS_MINUTES = [1440, 60];
+
 export const DEFAULT_BRANDING: Branding = {
   displayName: 'Booking',
   tagline: 'Book a time that works for you',
@@ -28,6 +32,7 @@ function projectBranding(d: Record<string, unknown>): Branding {
     adsConversionId: d.adsConversionId as string | undefined,
     adsConversionLabel: d.adsConversionLabel as string | undefined,
     theme: ((d.theme as ThemeMode) ?? 'dark') as ThemeMode,
+    defaultRemindersMinutesBefore: d.defaultRemindersMinutesBefore as number[] | undefined,
     updatedAt: (d.updatedAt as string) ?? DEFAULT_BRANDING.updatedAt,
   };
 }

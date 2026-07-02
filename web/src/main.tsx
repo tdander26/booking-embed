@@ -14,7 +14,13 @@ import { setTenant } from './api/client';
 // Resolve the tenant from the URL path ONCE, before any API call fires.
 setTenant(resolveRoute().tenantSlug);
 
-if (isEmbedded()) document.body.classList.add('embed');
+if (isEmbedded()) {
+  // Mark BOTH <html> and <body> so the embed CSS can let the document shrink to
+  // content height — a fixed 100% height stops the ResizeObserver from firing on
+  // content/step changes, which would leave the iframe scrolling internally.
+  document.documentElement.classList.add('embed');
+  document.body.classList.add('embed');
+}
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

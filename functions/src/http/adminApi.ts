@@ -10,6 +10,12 @@ import {
   PLATFORM_OWNER_EMAIL,
 } from '../config';
 import { loadBranding, saveBranding } from '../branding';
+import { PRACTICE_INFO } from '../chat/prompt';
+import {
+  loadPracticeInfoOverride,
+  savePracticeInfoOverride,
+  PRACTICE_INFO_MAX_LEN,
+} from '../chat/settings';
 import { tenantActive } from '../tenants';
 import { makeOAuthClient, buildConsentUrl, listCalendars } from '../google/oauth';
 import {
@@ -42,6 +48,7 @@ import type {
   EventType,
   AvailabilitySchedule,
   Booking,
+  ChatSession,
   Member,
   MemberCalendarRef,
 } from '../types';
@@ -200,7 +207,12 @@ const eventTypeSchema = z.object({
   slotIntervalMinutes: z.number().int().min(5).max(240).default(30),
   dailyBookingLimit: z.number().int().min(1).max(100).nullable().default(null),
   collectPhone: z.boolean().default(false),
-  remindersMinutesBefore: z.array(z.number().int().min(0).max(20_160)).max(5).default([1440, 60]),
+  // null => inherit the practice default (tenant.defaultRemindersMinutesBefore).
+  remindersMinutesBefore: z
+    .array(z.number().int().min(0).max(20_160))
+    .max(5)
+    .nullable()
+    .default(null),
   sortOrder: z.number().int().default(0),
 });
 
@@ -225,6 +237,11 @@ const brandingSchema = z.object({
   adsConversionId: z.string().max(40).optional(),
   adsConversionLabel: z.string().max(120).optional(),
   theme: z.enum(['dark', 'light', 'auto']).optional(),
+  // Practice-wide default reminder schedule (minutes before). [] => no reminders.
+  defaultRemindersMinutesBefore: z
+    .array(z.number().int().min(0).max(20_160))
+    .max(5)
+    .optional(),
 });
 
 const memberSchema = z.object({
@@ -753,5 +770,72 @@ adminRouter.put(
       throw badRequest('Invalid timezone.', 'bad_timezone');
     }
     res.json(await saveBranding(req.tenantId!, parsed.data));
+  }),
+);
+
+// ---- Chat assistant settings (editable practice info) ----
+
+const chatSettingsSchema = z.object({
+  practiceInfo: z.string().max(PRACTICE_INFO_MAX_LEN),
+});
+
+adminRouter.get(
+  '/api/admin/t/:tenantId/chat-settings',
+  wrap(async (req: AdminRequest, res) => {
+    const practiceInfo = await loadPracticeInfoOverride(req.tenantId!);
+    res.json({ practiceInfo, defaultPracticeInfo: PRACTICE_INFO });
+  }),
+);
+
+adminRouter.put(
+  '/api/admin/t/:tenantId/chat-settings',
+  wrap(async (req: AdminRequest, res) => {
+    const parsed = chatSettingsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid chat settings.', 'invalid_body');
+    await savePracticeInfoOverride(req.tenantId!, parsed.data.practiceInfo.trim());
+    const practiceInfo = await loadPracticeInfoOverride(req.tenantId!);
+    res.json({ practiceInfo, defaultPracticeInfo: PRACTICE_INFO });
+  }),
+);
+
+// ---- Website chat conversations (transcripts saved by /api/bot/chat) ----
+
+adminRouter.get(
+  '/api/admin/t/:tenantId/chat-sessions',
+  wrap(async (req: AdminRequest, res) => {
+    const snap = await tenantDb(req.tenantId!)
+      .chatSessions()
+      .orderBy('updatedAt', 'desc')
+      .limit(200)
+      .get();
+    const sessions = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatSession);
+    res.json({ sessions });
+  }),
+);
+
+adminRouter.delete(
+  '/api/admin/t/:tenantId/chat-sessions/:id',
+  wrap(async (req: AdminRequest, res) => {
+    await tenantDb(req.tenantId!).chatSessions().doc(req.params.id).delete();
+    res.json({ ok: true });
+  }),
+);
+
+// Delete ALL transcripts (mirrors the old plugin's "Delete all" control).
+adminRouter.delete(
+  '/api/admin/t/:tenantId/chat-sessions',
+  wrap(async (req: AdminRequest, res) => {
+    const col = tenantDb(req.tenantId!).chatSessions();
+    let deleted = 0;
+    for (;;) {
+      const snap = await col.limit(300).get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      deleted += snap.size;
+      if (snap.size < 300) break;
+    }
+    res.json({ ok: true, deleted });
   }),
 );

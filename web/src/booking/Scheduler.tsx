@@ -43,12 +43,18 @@ export function Scheduler({
   // Tracks whether we have *ever* seen a slot for this provider across month
   // navigation, so we only show the no-dead-end panel when truly empty.
   const everHadSlots = useRef(false);
+  // While true, the calendar auto-walks forward to the first month that has any
+  // openings, so the user lands on real availability instead of a blank month.
+  // Cleared once a month with slots is found, the horizon is reached, or the user
+  // navigates manually.
+  const seeking = useRef(true);
 
-  // On provider change: reset the "ever had slots" memory AND jump the calendar
-  // back to the current month, so a switched-in provider is evaluated from their
-  // earliest month instead of inheriting the previous provider's far-future page.
+  // On provider change: reset the seek state AND jump the calendar back to the
+  // current month, so a switched-in provider is evaluated from their earliest
+  // month instead of inheriting the previous provider's far-future page.
   useEffect(() => {
     everHadSlots.current = false;
+    seeking.current = true;
     setSelectedDay(null);
     setMonthAnchor(DateTime.now().setZone(tz).startOf('month'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -66,8 +72,24 @@ export function Scheduler({
         if (!alive) return;
         setAvail(res);
         const firstWithSlots = res.days.find((d) => d.slots.length > 0)?.date ?? null;
-        if (firstWithSlots) everHadSlots.current = true;
-        setSelectedDay(firstWithSlots);
+        if (firstWithSlots) {
+          everHadSlots.current = true;
+          setSelectedDay(firstWithSlots);
+          seeking.current = false; // landed on real availability
+        } else {
+          setSelectedDay(null);
+          // Empty month: while still seeking, walk forward to the next month
+          // (bounded by the bookable horizon) so we surface the first opening.
+          const horizonMonth = DateTime.now()
+            .setZone(tz)
+            .plus({ days: eventType.maxDaysInFuture })
+            .startOf('month');
+          if (seeking.current && monthAnchor.startOf('month') < horizonMonth) {
+            setMonthAnchor((m) => m.plus({ months: 1 }));
+          } else {
+            seeking.current = false;
+          }
+        }
       })
       .catch((e) => alive && setErr((e as Error).message))
       .finally(() => alive && setLoading(false));
@@ -168,7 +190,10 @@ export function Scheduler({
             <button
               aria-label="Previous month"
               disabled={!canPrev}
-              onClick={() => setMonthAnchor((m) => m.minus({ months: 1 }))}
+              onClick={() => {
+                seeking.current = false;
+                setMonthAnchor((m) => m.minus({ months: 1 }));
+              }}
               className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition hover:bg-overlay hover:text-brand disabled:opacity-25 disabled:hover:bg-transparent"
             >
               <ChevronLeft size={18} />
@@ -179,7 +204,10 @@ export function Scheduler({
             <button
               aria-label="Next month"
               disabled={!canNext}
-              onClick={() => setMonthAnchor((m) => m.plus({ months: 1 }))}
+              onClick={() => {
+                seeking.current = false;
+                setMonthAnchor((m) => m.plus({ months: 1 }));
+              }}
               className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition hover:bg-overlay hover:text-brand disabled:opacity-25 disabled:hover:bg-transparent"
             >
               <ChevronRight size={18} />
@@ -212,10 +240,11 @@ export function Scheduler({
                     onClick={() => setSelectedDay(ds)}
                     className={[
                       'relative flex aspect-square items-center justify-center rounded-lg text-sm transition-all duration-150',
-                      !inMonth ? 'text-faint/40' : '',
                       selectable
                         ? 'font-semibold text-ink hover:bg-overlay hover:ring-1 hover:ring-brand/40'
-                        : 'text-faint/50',
+                        : inMonth
+                          ? 'text-faint opacity-40 cursor-not-allowed' // this month, no openings → grayed out
+                          : 'text-faint opacity-20', // filler days from adjacent months
                       isSelected
                         ? '!text-brand-fg shadow-gold-glow [background:linear-gradient(135deg,var(--brand-light),var(--brand-dark))]'
                         : '',

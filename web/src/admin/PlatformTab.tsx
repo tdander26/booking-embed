@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { KeyRound, Copy, Check, Plus } from 'lucide-react';
+import { KeyRound, Copy, Check, Plus, Mail } from 'lucide-react';
 import * as api from '../api/client';
-import type { SignupCodeView } from '../api/client';
+import type { SignupCodeView, EmailUsageView } from '../api/client';
 import { Spinner, Banner, Button, Card, Field, inputClass } from '../components/ui';
 
 /** Platform-owner only. Mint + review the access codes that gate self-serve
@@ -64,6 +64,8 @@ export function PlatformTab() {
 
   return (
     <div className="space-y-5">
+      <EmailUsageCard />
+
       <Card className="p-5">
         <div className="mb-1 flex items-center gap-2">
           <KeyRound size={18} className="text-brand" />
@@ -171,5 +173,138 @@ export function PlatformTab() {
         )}
       </Card>
     </div>
+  );
+}
+
+/** A labeled usage bar with shape+color state (ok / near / over the limit). */
+function Meter({
+  label,
+  value,
+  limit,
+  sub,
+}: {
+  label: string;
+  value: number;
+  limit: number;
+  sub: string;
+}) {
+  const ratio = limit > 0 ? value / limit : 0;
+  const pct = Math.min(100, Math.round(ratio * 100));
+  const state = ratio >= 1 ? 'over' : ratio >= 0.8 ? 'near' : 'ok';
+  const color = state === 'over' ? '#dc2626' : state === 'near' ? '#d99409' : 'var(--brand)';
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between">
+        <span className="text-sm font-medium text-ink">{label}</span>
+        <span className="text-sm text-muted">
+          <span className="font-semibold text-ink">{value.toLocaleString()}</span> /{' '}
+          {limit.toLocaleString()}
+        </span>
+      </div>
+      <div className="h-2.5 w-full overflow-hidden rounded-full bg-overlay">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${pct}%`, background: color }}
+        />
+      </div>
+      <div className="mt-1 flex items-center justify-between text-xs">
+        <span className="text-faint">{sub}</span>
+        {state !== 'ok' && (
+          <span style={{ color }} className="font-medium">
+            {state === 'over' ? '● Over free tier' : '▲ Near limit'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Platform-wide email volume vs Resend's free tier (the binding cost limit). */
+function EmailUsageCard() {
+  const [u, setU] = useState<EmailUsageView | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.platformEmailUsage().then(setU).catch((e) => setErr((e as Error).message));
+  }, []);
+
+  const TYPES: { key: string; label: string }[] = [
+    { key: 'reminder', label: 'reminders' },
+    { key: 'confirmation', label: 'confirmations' },
+    { key: 'cancellation', label: 'cancellations' },
+    { key: 'other', label: 'other' },
+  ];
+
+  return (
+    <Card className="p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <Mail size={18} className="text-brand" />
+        <h2 className="text-base font-semibold text-ink">Email usage</h2>
+      </div>
+      <p className="mb-4 text-sm text-muted">
+        Every email across all practices — confirmations, reminders &amp; cancellations — against
+        Resend&apos;s free tier. The daily cap is the one that bites first.
+      </p>
+
+      {err && <Banner kind="error">{err}</Banner>}
+      {!u ? (
+        <Spinner />
+      ) : (
+        <div className="space-y-4">
+          <Meter
+            label="Today (UTC)"
+            value={u.today}
+            limit={u.limits.perDay}
+            sub="Free tier resets daily at 00:00 UTC"
+          />
+          <Meter
+            label={`This month · ${u.month}`}
+            value={u.total}
+            limit={u.limits.perMonth}
+            sub={`Free tier: ${u.limits.perMonth.toLocaleString()} / month`}
+          />
+
+          {u.total > 0 && (
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
+              {TYPES.filter((t) => (u.byType[t.key] ?? 0) > 0).map((t) => (
+                <span key={t.key}>
+                  <span className="font-semibold text-ink">
+                    {(u.byType[t.key] ?? 0).toLocaleString()}
+                  </span>{' '}
+                  {t.label}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {(u.today / u.limits.perDay >= 0.8 || u.total / u.limits.perMonth >= 0.8) && (
+            <div className="rounded-xl border border-hair bg-overlay-soft p-3 text-xs text-muted">
+              Approaching the free tier.{' '}
+              <span className="font-medium text-ink">Resend Pro is $20/mo</span> for 50,000
+              emails/month and removes the 100/day cap.
+            </div>
+          )}
+
+          {Object.keys(u.byTenant).length > 0 && (
+            <div className="border-t border-hair-soft pt-3">
+              <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-faint">
+                By practice (this month)
+              </h3>
+              <div className="space-y-1">
+                {Object.entries(u.byTenant)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 8)
+                  .map(([slug, n]) => (
+                    <div key={slug} className="flex items-center justify-between text-sm">
+                      <span className="text-muted">{slug}</span>
+                      <span className="text-ink">{n.toLocaleString()}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

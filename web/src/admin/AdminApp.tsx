@@ -6,7 +6,7 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import { CalendarDays, Clock, ListChecks, Settings, LogOut, Users, Code, KeyRound } from 'lucide-react';
+import { CalendarDays, Clock, ListChecks, MessageSquare, Settings, LogOut, Users, Code, KeyRound } from 'lucide-react';
 import { getFirebaseAuth } from '../lib/firebase';
 import * as api from '../api/client';
 import { ApiError } from '../api/client';
@@ -17,14 +17,24 @@ import { EventTypesTab } from './EventTypesTab';
 import { ProvidersTab } from './ProvidersTab';
 import { SchedulesTab } from './SchedulesTab';
 import { BookingsTab } from './BookingsTab';
+import { ConversationsTab } from './ConversationsTab';
 import { EmbedTab } from './EmbedTab';
 import { SettingsTab } from './SettingsTab';
 import { PlatformTab } from './PlatformTab';
 
-type Tab = 'bookings' | 'eventTypes' | 'providers' | 'schedules' | 'embed' | 'settings' | 'platform';
+type Tab =
+  | 'bookings'
+  | 'conversations'
+  | 'eventTypes'
+  | 'providers'
+  | 'schedules'
+  | 'embed'
+  | 'settings'
+  | 'platform';
 
 const TABS: { key: Tab; label: string; icon: typeof Clock }[] = [
   { key: 'bookings', label: 'Bookings', icon: ListChecks },
+  { key: 'conversations', label: 'Conversations', icon: MessageSquare },
   { key: 'eventTypes', label: 'Event types', icon: CalendarDays },
   { key: 'providers', label: 'Providers', icon: Users },
   { key: 'schedules', label: 'Availability', icon: Clock },
@@ -123,7 +133,7 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
         </Card>
       ) : (
         <>
-          <nav className="mb-6 flex gap-1 overflow-x-auto rounded-xl border border-hair-soft bg-surface p-1">
+          <nav className="mb-6 flex flex-wrap gap-1 rounded-xl border border-hair-soft bg-surface p-1">
             {tabs.map((t) => {
               const Icon = t.icon;
               const active = tab === t.key;
@@ -131,20 +141,24 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
                 <button
                   key={t.key}
                   onClick={() => setTab(t.key)}
+                  title={t.label}
+                  aria-label={t.label}
                   className={[
-                    'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition',
+                    'inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition lg:flex-none lg:justify-start lg:px-3',
                     active
                       ? 'bg-surface-3 text-ink shadow-sm ring-1 ring-hair'
                       : 'text-muted hover:text-ink hover:bg-overlay',
                   ].join(' ')}
                 >
-                  <Icon size={16} className={active ? 'text-brand' : ''} /> {t.label}
+                  <Icon size={16} className={active ? 'text-brand' : ''} />
+                  <span className="hidden lg:inline">{t.label}</span>
                 </button>
               );
             })}
           </nav>
 
           {tab === 'bookings' && <BookingsTab />}
+          {tab === 'conversations' && <ConversationsTab />}
           {tab === 'eventTypes' && <EventTypesTab />}
           {tab === 'providers' && <ProvidersTab me={me} />}
           {tab === 'schedules' && <SchedulesTab />}

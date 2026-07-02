@@ -21,6 +21,7 @@ export const COL = {
   slotLocks: 'slotLocks',
   dayCounters: 'dayCounters',
   reminderSends: 'reminderSends',
+  chatSessions: 'chatSessions', // momentum website chat assistant transcripts
 } as const;
 
 /** Root, platform-level collections (NOT tenant-scoped). */
@@ -28,6 +29,7 @@ export const ROOT = {
   tenants: 'tenants',
   oauthStates: 'oauthStates', // short-lived OAuth state; carries tenantId in the doc
   signupCodes: 'signupCodes', // hashed access codes
+  emailUsage: 'emailUsage', // platform-wide email-send tallies (one doc per UTC month)
 } as const;
 
 /** Subcollection under members/{memberId} holding server-only Google connections. */
@@ -59,6 +61,7 @@ export function tenantDb(tenantId: string) {
     slotLocks: () => root.collection(COL.slotLocks),
     dayCounters: () => root.collection(COL.dayCounters),
     reminderSends: () => root.collection(COL.reminderSends),
+    chatSessions: () => root.collection(COL.chatSessions),
   };
 }
 

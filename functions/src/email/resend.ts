@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import { logger } from 'firebase-functions';
 import { RESEND_API_KEY, EMAIL_FROM, isEmulator } from '../config';
+import { recordEmailSend, classifyKind } from './usage';
 
 function secret(): string {
   try {
@@ -22,6 +23,7 @@ export async function sendEmail(opts: {
   text?: string;
   from?: string; // per-tenant sender; falls back to the shared EMAIL_FROM
   idempotencyKey?: string;
+  tenantId?: string; // for the platform email-usage meter (attribution only)
 }): Promise<string | null> {
   const key = secret();
   // Real Resend keys start with "re_"; anything else (incl. deploy placeholders)
@@ -46,7 +48,12 @@ export async function sendEmail(opts: {
     opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined,
   );
   if (error) {
-    throw new Error(`Resend send failed: ${error.name} — ${error.message}`);
+    // Include the recipient: a domain/verification restriction that lets the
+    // account owner through but rejects other providers is invisible otherwise.
+    throw new Error(`Resend send failed to ${opts.to}: ${error.name} — ${error.message}`);
   }
+  // Meter only real, successful sends — these are what count against the Resend
+  // quota. Best-effort; recordEmailSend never throws.
+  await recordEmailSend({ tenantId: opts.tenantId, kind: classifyKind(opts.idempotencyKey) });
   return data?.id ?? null;
 }

@@ -12,7 +12,86 @@ export function SettingsTab() {
     <div className="space-y-6">
       <CalendarPointerCard />
       <BrandingPanel />
+      <ChatAssistantPanel />
     </div>
+  );
+}
+
+/** Editable knowledge base for the website chat assistant. Blank => the
+ * built-in default text ships with the code; saving text overrides it live
+ * (no deploy needed). */
+function ChatAssistantPanel() {
+  const [text, setText] = useState<string | null>(null);
+  const [defaultText, setDefaultText] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .adminGetChatSettings()
+      .then((s) => {
+        setDefaultText(s.defaultPracticeInfo);
+        // Prefill the editor with the effective text so editing starts from
+        // what the bot actually uses today.
+        setText(s.practiceInfo || s.defaultPracticeInfo);
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  const save = async (value: string) => {
+    setBusy(true);
+    setErr(null);
+    setSaved(false);
+    try {
+      const next = await api.adminSaveChatSettings(value);
+      setText(next.practiceInfo || next.defaultPracticeInfo);
+      setSaved(true);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (err && text === null) return <Banner kind="error">{err}</Banner>;
+  if (text === null) return <Spinner />;
+
+  return (
+    <Card className="p-5">
+      <h2 className="mb-1 text-base font-semibold text-ink">Chat assistant</h2>
+      <p className="mb-3 text-sm text-muted">
+        Everything the website chat assistant is allowed to state as fact — hours, pricing,
+        services, policies, FAQ. It will not answer beyond this text; unknown questions get
+        steered to the free consult. Edits apply immediately, no deploy needed.
+      </p>
+      {err && <Banner kind="error">{err}</Banner>}
+      <Field label="Practice info (the bot's knowledge)">
+        <textarea
+          className={`${inputClass} min-h-[320px] font-mono text-xs leading-relaxed`}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+        />
+      </Field>
+      <div className="mt-4 flex items-center gap-3">
+        <Button onClick={() => save(text)} disabled={busy}>
+          {busy ? 'Saving…' : 'Save chat info'}
+        </Button>
+        <button
+          type="button"
+          className="text-sm text-muted underline-offset-2 hover:underline disabled:opacity-50"
+          disabled={busy}
+          onClick={() => {
+            setText(defaultText);
+            void save('');
+          }}
+        >
+          Reset to default
+        </button>
+        {saved && <span className="text-sm text-brand">Saved</span>}
+      </div>
+    </Card>
   );
 }
 
@@ -65,6 +144,15 @@ function BrandingPanel() {
   if (err && !b) return <Banner kind="error">{err}</Banner>;
   if (!b) return <Spinner />;
   const set = (patch: Partial<PublicBranding>) => setB({ ...b, ...patch });
+
+  // Practice-wide reminder default. Absent => the built-in [1440, 60] (24h + 1h).
+  const reminders = b.defaultRemindersMinutesBefore ?? [1440, 60];
+  const toggleReminder = (min: number, on: boolean) => {
+    const next = new Set(reminders);
+    if (on) next.add(min);
+    else next.delete(min);
+    set({ defaultRemindersMinutesBefore: [...next].sort((x, y) => y - x) });
+  };
 
   return (
     <Card className="p-5">
@@ -141,6 +229,36 @@ function BrandingPanel() {
               onChange={(e) => set({ emailFrom: e.target.value })}
             />
           </Field>
+        </div>
+        <div className="sm:col-span-2 border-t border-hair-soft pt-4">
+          <h3 className="mb-1 text-sm font-semibold text-ink">Appointment reminders</h3>
+          <p className="mb-3 text-xs text-faint">
+            Reminder emails sent to patients before each appointment. Applies to event types set
+            to “Use practice default.” Fewer reminders means fewer emails.
+          </p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={reminders.includes(1440)}
+                onChange={(e) => toggleReminder(1440, e.target.checked)}
+              />
+              Email a reminder 24 hours before
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={reminders.includes(60)}
+                onChange={(e) => toggleReminder(60, e.target.checked)}
+              />
+              Email a reminder 1 hour before
+            </label>
+            {reminders.length === 0 && (
+              <p className="text-xs text-faint">
+                No reminder emails will be sent — patients still get the booking confirmation.
+              </p>
+            )}
+          </div>
         </div>
         <div className="sm:col-span-2 border-t border-hair-soft pt-4">
           <h3 className="mb-1 text-sm font-semibold text-ink">

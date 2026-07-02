@@ -7,6 +7,7 @@ import {
   confirmationEmail,
   reminderEmail,
   cancellationEmail,
+  rescheduleEmail,
   providerNewBookingEmail,
   providerCancellationEmail,
 } from './email/templates';
@@ -21,7 +22,18 @@ async function providerContact(
   branding: Branding,
 ): Promise<{ email: string; tz: string } | null> {
   const member = await loadMember(tenantId, booking.memberId);
-  if (!member?.email) return null;
+  if (!member?.email) {
+    // A booking assigned to a provider with no member record or no email means
+    // that provider silently never hears about it. Surface it instead of skipping
+    // in the dark (see the "Anna never got notified" class of misconfiguration).
+    logger.warn('Provider notification skipped: no member email', {
+      tenantId,
+      bookingId: booking.id,
+      memberId: booking.memberId,
+      reason: member ? 'email_missing' : 'member_not_found',
+    });
+    return null;
+  }
   return { email: member.email, tz: member.timezone || branding.timezone };
 }
 
@@ -63,6 +75,7 @@ export async function sendBookingConfirmation(
       html,
       text,
       from: branding.emailFrom,
+      tenantId,
       idempotencyKey: `confirm/${booking.id}`,
     });
   });
@@ -78,10 +91,32 @@ export async function sendBookingConfirmation(
         html,
         text,
         from: branding.emailFrom,
+        tenantId,
         idempotencyKey: `confirm-provider/${booking.id}`,
       });
     });
   }
+}
+
+export async function sendBookingReschedule(
+  tenantId: string,
+  booking: Booking,
+  branding: Branding,
+): Promise<void> {
+  // Keyed by the NEW start so each distinct reschedule sends exactly once (a
+  // retry to the same time is idempotent; a later move to another time fires).
+  await sendOnce(tenantId, booking.id, `reschedule:${booking.startUtc}`, async () => {
+    const { subject, html, text } = rescheduleEmail(booking, branding);
+    await sendEmail({
+      to: booking.invitee.email,
+      subject,
+      html,
+      text,
+      from: branding.emailFrom,
+      tenantId,
+      idempotencyKey: `reschedule/${booking.id}/${booking.startUtc}`,
+    });
+  });
 }
 
 export async function sendBookingReminder(
@@ -98,6 +133,7 @@ export async function sendBookingReminder(
       html,
       text,
       from: branding.emailFrom,
+      tenantId,
       idempotencyKey: `reminder/${booking.id}/${minutesBefore}`,
     });
     if (booking.invitee.phone) {
@@ -131,6 +167,7 @@ export async function sendBookingCancellation(
       html,
       text,
       from: branding.emailFrom,
+      tenantId,
       idempotencyKey: `cancel/${booking.id}`,
     });
   });
@@ -145,6 +182,7 @@ export async function sendBookingCancellation(
         html,
         text,
         from: branding.emailFrom,
+        tenantId,
         idempotencyKey: `cancel-provider/${booking.id}`,
       });
     });

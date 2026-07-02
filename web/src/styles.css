@@ -59,6 +59,17 @@ body,
   height: 100%;
 }
 
+/* In embed mode the iframe auto-sizes to content, so the document must shrink to
+   content height. A fixed 100% height pins the document to the viewport, which
+   stops the ResizeObserver from firing on content/step changes and leaves the
+   iframe scrolling internally (e.g. the details form with custom questions). */
+html.embed,
+html.embed body,
+html.embed #root {
+  height: auto;
+  min-height: 0;
+}
+
 body {
   margin: 0;
   color: var(--text);

@@ -28,6 +28,9 @@ export interface PublicBranding {
   adsConversionLabel?: string;
   // Admin-only (returned by /admin/branding, omitted from the public endpoint).
   emailFrom?: string;
+  // Admin-only: practice-wide default reminder schedule (minutes before).
+  // Inherited by event types set to "use practice default". [] => no reminders.
+  defaultRemindersMinutesBefore?: number[];
 }
 
 export interface IntakeQuestion {
@@ -108,7 +111,10 @@ export interface BookingConfirmation {
 export interface ManageView {
   bookingId: string;
   status: BookingStatus;
+  eventTypeId: string;
   eventTypeName: string;
+  memberId?: string;
+  providerName?: string;
   startUtc: string;
   endUtc: string;
   durationMinutes: number;
@@ -123,6 +129,21 @@ export interface BookingAnswer {
   label: string;
   type: QuestionType;
   value: AnswerValue;
+}
+
+// ---- Website chat conversations (admin) ----
+export type ChatSessionStatus = 'open' | 'slots_shown' | 'booking_click';
+export interface ChatTranscriptMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+export interface ChatSessionView {
+  id: string;
+  status: ChatSessionStatus;
+  messageCount: number;
+  messages: ChatTranscriptMessage[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ---- Admin DTOs ----
@@ -165,7 +186,8 @@ export interface EventType {
   slotIntervalMinutes: number;
   dailyBookingLimit: number | null;
   collectPhone: boolean;
-  remindersMinutesBefore: number[];
+  // null/absent => inherit the practice default; [] => no reminders.
+  remindersMinutesBefore: number[] | null;
   sortOrder: number;
   createdAt?: string;
   updatedAt?: string;

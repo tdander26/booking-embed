@@ -13,6 +13,7 @@ import {
 import {
   createBooking,
   cancelBooking,
+  rescheduleBooking,
   loadBookingForManage,
 } from '../scheduling/booking';
 import { listActiveMembers, publicProvider, byDisplayOrder } from '../members';
@@ -339,7 +340,10 @@ function manageView(b: Booking) {
   return {
     bookingId: b.id,
     status: b.status,
+    eventTypeId: b.eventTypeId,
     eventTypeName: b.eventTypeName,
+    memberId: b.memberId,
+    providerName: b.memberName,
     startUtc: b.startUtc,
     endUtc: b.endUtc,
     durationMinutes: b.durationMinutes,
@@ -372,6 +376,24 @@ publicRouter.post(
     const parsed = cancelSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid request.', 'invalid_body');
     const booking = await cancelBooking(tid(req), req.params.id, parsed.data.token, parsed.data.reason);
+    res.json(manageView(booking));
+  }),
+);
+
+const rescheduleSchema = z.object({
+  token: z.string().min(1).max(200),
+  startUtc: z.string().min(1).max(40),
+});
+
+publicRouter.post(
+  dual('bookings/:id/reschedule'),
+  wrap(async (req, res) => {
+    if (!rateLimit(`reschedule:${clientIp(req)}`, 20, 60_000)) {
+      throw forbidden('Too many requests.', 'rate_limited');
+    }
+    const parsed = rescheduleSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid request.', 'invalid_body');
+    const booking = await rescheduleBooking(tid(req), req.params.id, parsed.data.token, parsed.data.startUtc);
     res.json(manageView(booking));
   }),
 );

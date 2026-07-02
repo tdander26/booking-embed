@@ -13,6 +13,7 @@ import type {
   ConnectionView,
   AdminMe,
   AnswerValue,
+  ChatSessionView,
 } from './types';
 
 /** The active tenant for this page load. Set once at boot from the URL path
@@ -145,6 +146,12 @@ export const cancelBooking = (id: string, token: string, reason?: string) =>
     body: JSON.stringify({ token, reason }),
   });
 
+export const rescheduleBooking = (id: string, token: string, startUtc: string) =>
+  request<ManageView>(`/bookings/${encodeURIComponent(id)}/reschedule`, {
+    method: 'POST',
+    body: JSON.stringify({ token, startUtc }),
+  });
+
 // ---- Admin: identity ----
 export const adminMe = () => request<AdminMe>('/admin/me', { admin: true });
 
@@ -243,6 +250,31 @@ export const adminGetBookings = (from?: string, to?: string) => {
     admin: true,
   });
 };
+// ---- Admin: website chat conversations ----
+export const adminGetChatSessions = () =>
+  request<{ sessions: ChatSessionView[] }>('/admin/chat-sessions', { admin: true });
+export const adminDeleteChatSession = (id: string) =>
+  request<{ ok: true }>(`/admin/chat-sessions/${encodeURIComponent(id)}`, {
+    admin: true,
+    method: 'DELETE',
+  });
+export const adminDeleteAllChatSessions = () =>
+  request<{ ok: true; deleted: number }>('/admin/chat-sessions', {
+    admin: true,
+    method: 'DELETE',
+  });
+
+// ---- Admin: chat assistant settings (editable practice info) ----
+export type ChatSettings = { practiceInfo: string; defaultPracticeInfo: string };
+export const adminGetChatSettings = () =>
+  request<ChatSettings>('/admin/chat-settings', { admin: true });
+export const adminSaveChatSettings = (practiceInfo: string) =>
+  request<ChatSettings>('/admin/chat-settings', {
+    admin: true,
+    method: 'PUT',
+    body: JSON.stringify({ practiceInfo }),
+  });
+
 export const adminGetBranding = () =>
   request<PublicBranding & { updatedAt?: string }>('/admin/branding', { admin: true });
 export const adminSaveBranding = (body: Partial<PublicBranding>) =>
@@ -306,3 +338,16 @@ export const platformMintCode = (body: {
     '/api/platform/signup-codes',
     { method: 'POST', body: JSON.stringify(body) },
   );
+
+// ---- Platform owner: email-usage meter (Resend quota) ----
+export interface EmailUsageView {
+  month: string; // UTC 'YYYY-MM'
+  day: string; // UTC 'YYYY-MM-DD' (today)
+  total: number; // emails sent this month
+  today: number; // emails sent today (UTC)
+  byType: Record<string, number>;
+  byDay: Record<string, number>;
+  byTenant: Record<string, number>;
+  limits: { perDay: number; perMonth: number };
+}
+export const platformEmailUsage = () => rawAuthed<EmailUsageView>('/api/platform/email-usage');

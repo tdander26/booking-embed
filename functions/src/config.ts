@@ -52,6 +52,11 @@ export const TWILIO_FROM_NUMBER = defineString('TWILIO_FROM_NUMBER', {
   default: '',
 });
 
+// OpenRouter (AI scheduling assistant / chat bot). Left unset => the /api/bot
+// chat endpoint returns a "not configured" message and the widget degrades to
+// "call the office".
+export const OPENROUTER_API_KEY = defineSecret('OPENROUTER_API_KEY');
+
 // All secrets a function may need bound to it.
 export const ALL_SECRETS = [
   GOOGLE_CLIENT_ID,
@@ -59,6 +64,7 @@ export const ALL_SECRETS = [
   RESEND_API_KEY,
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
+  OPENROUTER_API_KEY,
 ];
 
 /** True inside the Firebase emulator — used to swap in mock Calendar/email. */

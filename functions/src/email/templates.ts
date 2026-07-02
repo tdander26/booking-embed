@@ -162,6 +162,31 @@ export function confirmationEmail(booking: Booking, branding: Branding): EmailCo
   };
 }
 
+export function rescheduleEmail(booking: Booking, branding: Branding): EmailContent {
+  const heading = 'Your appointment has a new time';
+  return {
+    subject: `Rescheduled: ${booking.eventTypeName} — ${fmtWhen(
+      booking.startUtc,
+      booking.invitee.timezone,
+    )}`,
+    html: shell(
+      branding,
+      heading,
+      `<p>Hi ${escapeHtml(
+        booking.invitee.name,
+      )}, your appointment has been rescheduled. Here are the new details:</p>${detailsBlock(
+        booking,
+        branding,
+      )}`,
+    ),
+    text: textVersion(
+      booking,
+      branding,
+      `Hi ${booking.invitee.name}, your appointment has been rescheduled. New details:`,
+    ),
+  };
+}
+
 export function reminderEmail(
   booking: Booking,
   branding: Branding,
