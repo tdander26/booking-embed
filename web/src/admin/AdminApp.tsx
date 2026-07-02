@@ -133,7 +133,7 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
         </Card>
       ) : (
         <>
-          <nav className="mb-6 flex gap-1 rounded-xl border border-hair-soft bg-surface p-1">
+          <nav className="mb-6 flex flex-wrap gap-1 rounded-xl border border-hair-soft bg-surface p-1">
             {tabs.map((t) => {
               const Icon = t.icon;
               const active = tab === t.key;
