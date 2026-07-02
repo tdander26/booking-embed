@@ -12,7 +12,86 @@ export function SettingsTab() {
     <div className="space-y-6">
       <CalendarPointerCard />
       <BrandingPanel />
+      <ChatAssistantPanel />
     </div>
+  );
+}
+
+/** Editable knowledge base for the website chat assistant. Blank => the
+ * built-in default text ships with the code; saving text overrides it live
+ * (no deploy needed). */
+function ChatAssistantPanel() {
+  const [text, setText] = useState<string | null>(null);
+  const [defaultText, setDefaultText] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .adminGetChatSettings()
+      .then((s) => {
+        setDefaultText(s.defaultPracticeInfo);
+        // Prefill the editor with the effective text so editing starts from
+        // what the bot actually uses today.
+        setText(s.practiceInfo || s.defaultPracticeInfo);
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  const save = async (value: string) => {
+    setBusy(true);
+    setErr(null);
+    setSaved(false);
+    try {
+      const next = await api.adminSaveChatSettings(value);
+      setText(next.practiceInfo || next.defaultPracticeInfo);
+      setSaved(true);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (err && text === null) return <Banner kind="error">{err}</Banner>;
+  if (text === null) return <Spinner />;
+
+  return (
+    <Card className="p-5">
+      <h2 className="mb-1 text-base font-semibold text-ink">Chat assistant</h2>
+      <p className="mb-3 text-sm text-muted">
+        Everything the website chat assistant is allowed to state as fact — hours, pricing,
+        services, policies, FAQ. It will not answer beyond this text; unknown questions get
+        steered to the free consult. Edits apply immediately, no deploy needed.
+      </p>
+      {err && <Banner kind="error">{err}</Banner>}
+      <Field label="Practice info (the bot's knowledge)">
+        <textarea
+          className={`${inputClass} min-h-[320px] font-mono text-xs leading-relaxed`}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+        />
+      </Field>
+      <div className="mt-4 flex items-center gap-3">
+        <Button onClick={() => save(text)} disabled={busy}>
+          {busy ? 'Saving…' : 'Save chat info'}
+        </Button>
+        <button
+          type="button"
+          className="text-sm text-muted underline-offset-2 hover:underline disabled:opacity-50"
+          disabled={busy}
+          onClick={() => {
+            setText(defaultText);
+            void save('');
+          }}
+        >
+          Reset to default
+        </button>
+        {saved && <span className="text-sm text-brand">Saved</span>}
+      </div>
+    </Card>
   );
 }
 

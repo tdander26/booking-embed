@@ -21,12 +21,16 @@ export const PRACTICE_TIMEZONE = 'America/Chicago';
 /** Public booking widget the "confirm" button hands off to. */
 export const BOOKING_BASE_URL = 'https://momentum-booking.web.app/';
 
-/** OpenRouter model (matches the WordPress plugin default). */
-export const OPENROUTER_MODEL = 'qwen/qwen-2.5-72b-instruct';
+/** OpenRouter model. Gemini Flash replies in ~1-2s (vs 5-10s for Qwen 72B) at a
+ *  comparable-or-lower price — same switch already proven on the WordPress bot. */
+export const OPENROUTER_MODEL = 'google/gemini-2.5-flash';
 
 /** Tried in order by OpenRouter when the primary model's providers are down or
  *  rate-limited — the usual cause of intermittent "having trouble connecting". */
-export const OPENROUTER_FALLBACK_MODELS = ['meta-llama/llama-3.3-70b-instruct'];
+export const OPENROUTER_FALLBACK_MODELS = [
+  'google/gemini-2.0-flash-001',
+  'meta-llama/llama-3.3-70b-instruct',
+];
 
 /** Office phone, used in fallbacks. */
 export const OFFICE_PHONE = '(763) 760-9176';
@@ -37,8 +41,10 @@ export const ESTABLISHED_BOOKING_URL =
   'https://momentum-health.janeapp.com/#/discipline/1/treatment/2';
 
 /**
- * The assistant's ONLY source of truth for factual answers. Edit this to change
- * what the bot "knows" — the prompt forbids guessing beyond it.
+ * The assistant's ONLY source of truth for factual answers — the DEFAULT text.
+ * The live text is editable in the admin (Settings → Chat assistant) and stored
+ * on the tenant doc (`chatPracticeInfo`); this constant is the fallback when
+ * nothing has been saved, and prefills the admin editor.
  */
 export const PRACTICE_INFO = `
 Practice: Momentum Health & Wellness Minnesota
@@ -52,10 +58,50 @@ New patients: Start with a FREE 15-minute phone consult to see if we're the righ
 Established (returning) patients: Book follow-up visits online here: ${ESTABLISHED_BOOKING_URL}
 Insurance: We do not take insurance. We provide a superbill for possible reimbursement depending on your benefits, and we accept HSA and FSA.
 Hours: Monday–Thursday, 10:00am–1:30pm and 3:00pm–6:00pm. By appointment only.
+
+FIRST VISIT (after the free consult)
+1–2 hours. Full health history, exam, and explanation of findings. Wear
+comfortable clothes. Bring any supplements you're taking and relevant medical
+documents.
+
+SERVICES / TESTS
+- Manual therapy and chiropractic care
+- Applied Kinesiology (AK) — a diagnostic system evaluating the Structural,
+  Chemical, and Emotional sides of health. Founded by chiropractor
+  Dr. George Goodheart in 1964.
+- Stool testing
+- Full comprehensive blood work (details below)
+
+FULL BLOOD PANEL
+Cost: $216.30 + $8 draw fee. Offered at cost — no markup.
+Includes a comprehensive workup across: CBC with differential and platelets;
+glycemic markers (glucose, A1C, insulin, HOMA-IR); lipid panel; protein;
+kidney function; liver markers; electrolytes; iron studies; inflammation and
+vitamin D (hs-CRP, homocysteine, 25-OH D); full thyroid panel (TSH, T3, T4,
+free T3/T4, reverse T3, antibodies, TBG); testosterone (total, free,
+percentile); and ANA by IFA (autoimmune screen).
+If asked for the exact marker list, say: "The doctors can walk you through the
+full breakdown during your consult."
+
+ASAP / EXPEDITED APPOINTMENTS
+For new patients who can't wait, special-circumstance appointments are
+available at roughly 1.5x the standard rate. The expedited rate applies for
+the duration of the wait you skipped (e.g., if we move you up 1 month, you're
+at the expedited rate for that first month, then standard).
+
+FAQ
+Q: Do I need a referral?
+A: No.
+Q: How long is a typical visit once established?
+A: 30–60 minutes.
+Q: Do you take HSA/FSA?
+A: Yes.
 `.trim();
 
-/** Full system prompt sent to OpenRouter on every turn. */
-export function buildSystemPrompt(): string {
+/** Full system prompt sent to OpenRouter on every turn. Pass the practice's
+ *  saved practice-info text to use it; blank/undefined falls back to the
+ *  built-in PRACTICE_INFO default above. */
+export function buildSystemPrompt(practiceInfoOverride?: string): string {
   return `You are the scheduling assistant for Momentum Health & Wellness, a functional medicine and chiropractic practice in Elk River, MN, with Dr. Todd Anderson and Dr. Anna Payne.
 
 Your job:
@@ -93,5 +139,5 @@ Booking flow:
 Office phone: ${OFFICE_PHONE}
 
 === PRACTICE INFO (your only source of truth) ===
-${PRACTICE_INFO}`;
+${(practiceInfoOverride || '').trim() || PRACTICE_INFO}`;
 }

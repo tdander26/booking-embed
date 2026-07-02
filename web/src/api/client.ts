@@ -264,6 +264,17 @@ export const adminDeleteAllChatSessions = () =>
     method: 'DELETE',
   });
 
+// ---- Admin: chat assistant settings (editable practice info) ----
+export type ChatSettings = { practiceInfo: string; defaultPracticeInfo: string };
+export const adminGetChatSettings = () =>
+  request<ChatSettings>('/admin/chat-settings', { admin: true });
+export const adminSaveChatSettings = (practiceInfo: string) =>
+  request<ChatSettings>('/admin/chat-settings', {
+    admin: true,
+    method: 'PUT',
+    body: JSON.stringify({ practiceInfo }),
+  });
+
 export const adminGetBranding = () =>
   request<PublicBranding & { updatedAt?: string }>('/admin/branding', { admin: true });
 export const adminSaveBranding = (body: Partial<PublicBranding>) =>

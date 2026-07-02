@@ -10,6 +10,12 @@ import {
   PLATFORM_OWNER_EMAIL,
 } from '../config';
 import { loadBranding, saveBranding } from '../branding';
+import { PRACTICE_INFO } from '../chat/prompt';
+import {
+  loadPracticeInfoOverride,
+  savePracticeInfoOverride,
+  PRACTICE_INFO_MAX_LEN,
+} from '../chat/settings';
 import { tenantActive } from '../tenants';
 import { makeOAuthClient, buildConsentUrl, listCalendars } from '../google/oauth';
 import {
@@ -764,6 +770,31 @@ adminRouter.put(
       throw badRequest('Invalid timezone.', 'bad_timezone');
     }
     res.json(await saveBranding(req.tenantId!, parsed.data));
+  }),
+);
+
+// ---- Chat assistant settings (editable practice info) ----
+
+const chatSettingsSchema = z.object({
+  practiceInfo: z.string().max(PRACTICE_INFO_MAX_LEN),
+});
+
+adminRouter.get(
+  '/api/admin/t/:tenantId/chat-settings',
+  wrap(async (req: AdminRequest, res) => {
+    const practiceInfo = await loadPracticeInfoOverride(req.tenantId!);
+    res.json({ practiceInfo, defaultPracticeInfo: PRACTICE_INFO });
+  }),
+);
+
+adminRouter.put(
+  '/api/admin/t/:tenantId/chat-settings',
+  wrap(async (req: AdminRequest, res) => {
+    const parsed = chatSettingsSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid chat settings.', 'invalid_body');
+    await savePracticeInfoOverride(req.tenantId!, parsed.data.practiceInfo.trim());
+    const practiceInfo = await loadPracticeInfoOverride(req.tenantId!);
+    res.json({ practiceInfo, defaultPracticeInfo: PRACTICE_INFO });
   }),
 );
 

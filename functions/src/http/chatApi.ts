@@ -33,6 +33,7 @@ import {
   OPENROUTER_FALLBACK_MODELS,
   buildSystemPrompt,
 } from '../chat/prompt';
+import { loadPracticeInfoOverride } from '../chat/settings';
 
 export const chatRouter = Router();
 
@@ -203,7 +204,14 @@ chatRouter.post(`${BASE}/chat`, async (req: Request, res: Response) => {
   // Only the recent tail is sent to the model; the full thread is saved.
   const convo = allMsgs.slice(-20);
 
-  const messages = [{ role: 'system', content: buildSystemPrompt() }, ...convo];
+  // Admin-editable practice info (Settings → Chat assistant); '' => default.
+  let practiceInfo = '';
+  try {
+    practiceInfo = await loadPracticeInfoOverride(CHAT_TENANT);
+  } catch {
+    /* fall back to the built-in default */
+  }
+  const messages = [{ role: 'system', content: buildSystemPrompt(practiceInfo) }, ...convo];
 
   // Two attempts against OpenRouter, plus provider-side fallback: the `models`
   // list lets OpenRouter route to the next model when the primary's providers
