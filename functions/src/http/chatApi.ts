@@ -30,6 +30,7 @@ import {
   PRACTICE_TIMEZONE,
   BOOKING_BASE_URL,
   OPENROUTER_MODEL,
+  OPENROUTER_FALLBACK_MODELS,
   buildSystemPrompt,
 } from '../chat/prompt';
 
@@ -204,43 +205,46 @@ chatRouter.post(`${BASE}/chat`, async (req: Request, res: Response) => {
 
   const messages = [{ role: 'system', content: buildSystemPrompt() }, ...convo];
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  // Two attempts against OpenRouter, plus provider-side fallback: the `models`
+  // list lets OpenRouter route to the next model when the primary's providers
+  // are down/rate-limited (the cause of intermittent 502s in the wild).
   let reply = '';
-  try {
-    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://momentumhealthwellnessmn.com',
-        'X-Title': 'Momentum Health & Wellness',
-      },
-      body: JSON.stringify({
-        model: OPENROUTER_MODEL,
-        messages,
-        temperature: 0.4,
-        max_tokens: 600,
-      }),
-      signal: ctrl.signal,
-    });
-    if (!resp.ok) {
-      clientError(res, 502, 'upstream', "I'm having trouble connecting right now. Please try again, or call the office.");
-      return;
+  for (let attempt = 0; attempt < 2 && !reply; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 600));
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20_000);
+    try {
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://momentumhealthwellnessmn.com',
+          'X-Title': 'Momentum Health & Wellness',
+        },
+        body: JSON.stringify({
+          model: OPENROUTER_MODEL,
+          models: [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS],
+          messages,
+          temperature: 0.4,
+          max_tokens: 600,
+        }),
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) continue;
+      const data = (await resp.json()) as {
+        choices?: { message?: { content?: string } }[];
+      };
+      reply = data?.choices?.[0]?.message?.content ?? '';
+    } catch {
+      /* timeout or network error — loop retries once */
+    } finally {
+      clearTimeout(timer);
     }
-    const data = (await resp.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    reply = data?.choices?.[0]?.message?.content ?? '';
-  } catch {
-    clientError(res, 502, 'upstream', "I'm having trouble connecting right now. Please try again, or call the office.");
-    return;
-  } finally {
-    clearTimeout(timer);
   }
 
   if (!reply) {
-    clientError(res, 502, 'empty_reply', "I didn't catch a response. Please try again, or call the office.");
+    clientError(res, 502, 'upstream', "I'm having trouble connecting right now. Please try again, or call the office.");
     return;
   }
 

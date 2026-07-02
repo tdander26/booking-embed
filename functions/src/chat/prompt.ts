@@ -24,6 +24,10 @@ export const BOOKING_BASE_URL = 'https://momentum-booking.web.app/';
 /** OpenRouter model (matches the WordPress plugin default). */
 export const OPENROUTER_MODEL = 'qwen/qwen-2.5-72b-instruct';
 
+/** Tried in order by OpenRouter when the primary model's providers are down or
+ *  rate-limited — the usual cause of intermittent "having trouble connecting". */
+export const OPENROUTER_FALLBACK_MODELS = ['meta-llama/llama-3.3-70b-instruct'];
+
 /** Office phone, used in fallbacks. */
 export const OFFICE_PHONE = '(763) 760-9176';
 
