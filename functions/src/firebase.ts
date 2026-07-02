@@ -21,6 +21,7 @@ export const COL = {
   slotLocks: 'slotLocks',
   dayCounters: 'dayCounters',
   reminderSends: 'reminderSends',
+  chatSessions: 'chatSessions', // momentum website chat assistant transcripts
 } as const;
 
 /** Root, platform-level collections (NOT tenant-scoped). */
@@ -60,6 +61,7 @@ export function tenantDb(tenantId: string) {
     slotLocks: () => root.collection(COL.slotLocks),
     dayCounters: () => root.collection(COL.dayCounters),
     reminderSends: () => root.collection(COL.reminderSends),
+    chatSessions: () => root.collection(COL.chatSessions),
   };
 }
 

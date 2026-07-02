@@ -22,6 +22,8 @@ import { computeAvailability, loadEventTypeBySlug } from '../scheduling/availabi
 import { listActiveMembers } from '../members';
 import { rateLimit } from '../util/ratelimit';
 import { OPENROUTER_API_KEY } from '../config';
+import { db, tenantDb } from '../firebase';
+import type { ChatTranscriptMessage } from '../types';
 import {
   CHAT_TENANT,
   CONSULT_EVENT_SLUG,
@@ -42,6 +44,60 @@ function clientError(res: Response, status: number, code: string, message: strin
 
 function clientKey(req: Request): string {
   return (req.ip || 'unknown').toString();
+}
+
+// ---- Transcript persistence (feeds the admin "Conversations" view) -----------
+const MAX_TRANSCRIPT_MESSAGES = 40;
+const STATUS_RANK: Record<string, number> = { open: 0, slots_shown: 1, booking_click: 2 };
+
+/** Validate the client session id before it becomes a Firestore doc id. */
+function sessionDocId(raw: unknown): string | null {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  return /^[A-Za-z0-9_-]{6,120}$/.test(s) ? s : null;
+}
+
+/** Upsert a conversation transcript (best-effort; never fails the chat turn). */
+async function saveTranscript(sessionRaw: unknown, messages: ChatTranscriptMessage[]): Promise<void> {
+  const id = sessionDocId(sessionRaw);
+  if (!id || messages.length === 0) return;
+  const capped = messages.slice(-MAX_TRANSCRIPT_MESSAGES);
+  const now = new Date().toISOString();
+  const ref = tenantDb(CHAT_TENANT).chatSessions().doc(id);
+  try {
+    const snap = await ref.get();
+    const base: Record<string, unknown> = {
+      id,
+      tenantId: CHAT_TENANT,
+      messages: capped,
+      messageCount: capped.length,
+      updatedAt: now,
+    };
+    if (!snap.exists) {
+      base.createdAt = now;
+      base.status = 'open';
+    }
+    await ref.set(base, { merge: true });
+  } catch {
+    /* transcript saving is best-effort */
+  }
+}
+
+/** Advance an EXISTING conversation's status; never regresses. */
+async function advanceStatus(sessionRaw: unknown, status: string): Promise<void> {
+  const id = sessionDocId(sessionRaw);
+  if (!id || !(status in STATUS_RANK)) return;
+  const ref = tenantDb(CHAT_TENANT).chatSessions().doc(id);
+  try {
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return; // no transcript yet -> nothing to advance
+      const cur = (snap.get('status') as string) || 'open';
+      if ((STATUS_RANK[status] ?? 0) <= (STATUS_RANK[cur] ?? 0)) return;
+      tx.set(ref, { status, updatedAt: new Date().toISOString() }, { merge: true });
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** "Dr. Anna Payne" -> "Dr. Payne" for compact slot labels; passthrough if it
@@ -134,7 +190,7 @@ chatRouter.post(`${BASE}/chat`, async (req: Request, res: Response) => {
   }
 
   const incoming: unknown = req.body?.messages;
-  const convo: ChatMessage[] = (Array.isArray(incoming) ? incoming : [])
+  const allMsgs: ChatMessage[] = (Array.isArray(incoming) ? incoming : [])
     .filter(
       (m): m is { role: string; content: string } =>
         !!m &&
@@ -142,8 +198,9 @@ chatRouter.post(`${BASE}/chat`, async (req: Request, res: Response) => {
         typeof (m as { content?: unknown }).content === 'string',
     )
     .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .slice(-20)
     .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 2000) }));
+  // Only the recent tail is sent to the model; the full thread is saved.
+  const convo = allMsgs.slice(-20);
 
   const messages = [{ role: 'system', content: buildSystemPrompt() }, ...convo];
 
@@ -212,6 +269,9 @@ chatRouter.post(`${BASE}/chat`, async (req: Request, res: Response) => {
       .slice(0, 5);
     reply = reply.replace(/\[OPTIONS\].*?\[\/OPTIONS\]/s, '').trim();
   }
+
+  // Persist the full conversation (best-effort) for the admin Conversations view.
+  await saveTranscript(req.body?.session_id, [...allMsgs, { role: 'assistant', content: reply }]);
 
   res.json({ reply, tool, options });
 });
@@ -291,6 +351,9 @@ chatRouter.post(`${BASE}/slots`, async (req: Request, res: Response) => {
       };
     });
 
+    // Mark the conversation as having reached the times step (admin view badge).
+    if (slots.length > 0) await advanceStatus(req.body?.session_id, 'slots_shown');
+
     res.json({ slots, has_more: hasMore });
   } catch {
     clientError(res, 500, 'server_error', "I can't pull up the calendar right now. Please call the office.");
@@ -301,7 +364,7 @@ chatRouter.post(`${BASE}/slots`, async (req: Request, res: Response) => {
 // Carries the chosen doctor + exact time so the widget jumps straight to the
 // pre-filled booking form (see BookingApp's `provider`/`start` params) instead
 // of the beginning of the flow.
-chatRouter.post(`${BASE}/booking-link`, (req: Request, res: Response) => {
+chatRouter.post(`${BASE}/booking-link`, async (req: Request, res: Response) => {
   const url = new URL(BOOKING_BASE_URL);
   url.searchParams.set('type', CONSULT_EVENT_SLUG);
 
@@ -312,11 +375,18 @@ chatRouter.post(`${BASE}/booking-link`, (req: Request, res: Response) => {
   const startMs = startsAt ? Date.parse(startsAt) : NaN;
   if (Number.isFinite(startMs)) url.searchParams.set('start', new Date(startMs).toISOString());
 
+  // The strongest signal a chat produced a booking attempt (admin view badge).
+  await advanceStatus(req.body?.session_id, 'booking_click');
+
   res.json({ url: url.toString() });
 });
 
-// ---- POST /api/bot/track : accepted, fire-and-forget (not persisted in v1) ----
-chatRouter.post(`${BASE}/track`, (_req: Request, res: Response) => {
+// ---- POST /api/bot/track : advance a conversation's status ------------------
+// Events (open -> slots_shown -> booking_click) mark how far the chat got, shown
+// as a badge in the admin Conversations view.
+chatRouter.post(`${BASE}/track`, async (req: Request, res: Response) => {
+  const event = typeof req.body?.event === 'string' ? req.body.event : '';
+  await advanceStatus(req.body?.session_id, event);
   res.json({ ok: true });
 });
 

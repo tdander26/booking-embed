@@ -131,6 +131,21 @@ export interface BookingAnswer {
   value: AnswerValue;
 }
 
+// ---- Website chat conversations (admin) ----
+export type ChatSessionStatus = 'open' | 'slots_shown' | 'booking_click';
+export interface ChatTranscriptMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+export interface ChatSessionView {
+  id: string;
+  status: ChatSessionStatus;
+  messageCount: number;
+  messages: ChatTranscriptMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---- Admin DTOs ----
 export interface DayWindow {
   start: string;

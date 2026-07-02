@@ -13,6 +13,7 @@ import type {
   ConnectionView,
   AdminMe,
   AnswerValue,
+  ChatSessionView,
 } from './types';
 
 /** The active tenant for this page load. Set once at boot from the URL path
@@ -249,6 +250,20 @@ export const adminGetBookings = (from?: string, to?: string) => {
     admin: true,
   });
 };
+// ---- Admin: website chat conversations ----
+export const adminGetChatSessions = () =>
+  request<{ sessions: ChatSessionView[] }>('/admin/chat-sessions', { admin: true });
+export const adminDeleteChatSession = (id: string) =>
+  request<{ ok: true }>(`/admin/chat-sessions/${encodeURIComponent(id)}`, {
+    admin: true,
+    method: 'DELETE',
+  });
+export const adminDeleteAllChatSessions = () =>
+  request<{ ok: true; deleted: number }>('/admin/chat-sessions', {
+    admin: true,
+    method: 'DELETE',
+  });
+
 export const adminGetBranding = () =>
   request<PublicBranding & { updatedAt?: string }>('/admin/branding', { admin: true });
 export const adminSaveBranding = (body: Partial<PublicBranding>) =>

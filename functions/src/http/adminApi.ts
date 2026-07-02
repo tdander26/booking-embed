@@ -42,6 +42,7 @@ import type {
   EventType,
   AvailabilitySchedule,
   Booking,
+  ChatSession,
   Member,
   MemberCalendarRef,
 } from '../types';
@@ -763,5 +764,47 @@ adminRouter.put(
       throw badRequest('Invalid timezone.', 'bad_timezone');
     }
     res.json(await saveBranding(req.tenantId!, parsed.data));
+  }),
+);
+
+// ---- Website chat conversations (transcripts saved by /api/bot/chat) ----
+
+adminRouter.get(
+  '/api/admin/t/:tenantId/chat-sessions',
+  wrap(async (req: AdminRequest, res) => {
+    const snap = await tenantDb(req.tenantId!)
+      .chatSessions()
+      .orderBy('updatedAt', 'desc')
+      .limit(200)
+      .get();
+    const sessions = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatSession);
+    res.json({ sessions });
+  }),
+);
+
+adminRouter.delete(
+  '/api/admin/t/:tenantId/chat-sessions/:id',
+  wrap(async (req: AdminRequest, res) => {
+    await tenantDb(req.tenantId!).chatSessions().doc(req.params.id).delete();
+    res.json({ ok: true });
+  }),
+);
+
+// Delete ALL transcripts (mirrors the old plugin's "Delete all" control).
+adminRouter.delete(
+  '/api/admin/t/:tenantId/chat-sessions',
+  wrap(async (req: AdminRequest, res) => {
+    const col = tenantDb(req.tenantId!).chatSessions();
+    let deleted = 0;
+    for (;;) {
+      const snap = await col.limit(300).get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      deleted += snap.size;
+      if (snap.size < 300) break;
+    }
+    res.json({ ok: true, deleted });
   }),
 );

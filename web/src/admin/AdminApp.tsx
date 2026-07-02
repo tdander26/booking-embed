@@ -6,7 +6,7 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import { CalendarDays, Clock, ListChecks, Settings, LogOut, Users, Code, KeyRound } from 'lucide-react';
+import { CalendarDays, Clock, ListChecks, MessageSquare, Settings, LogOut, Users, Code, KeyRound } from 'lucide-react';
 import { getFirebaseAuth } from '../lib/firebase';
 import * as api from '../api/client';
 import { ApiError } from '../api/client';
@@ -17,14 +17,24 @@ import { EventTypesTab } from './EventTypesTab';
 import { ProvidersTab } from './ProvidersTab';
 import { SchedulesTab } from './SchedulesTab';
 import { BookingsTab } from './BookingsTab';
+import { ConversationsTab } from './ConversationsTab';
 import { EmbedTab } from './EmbedTab';
 import { SettingsTab } from './SettingsTab';
 import { PlatformTab } from './PlatformTab';
 
-type Tab = 'bookings' | 'eventTypes' | 'providers' | 'schedules' | 'embed' | 'settings' | 'platform';
+type Tab =
+  | 'bookings'
+  | 'conversations'
+  | 'eventTypes'
+  | 'providers'
+  | 'schedules'
+  | 'embed'
+  | 'settings'
+  | 'platform';
 
 const TABS: { key: Tab; label: string; icon: typeof Clock }[] = [
   { key: 'bookings', label: 'Bookings', icon: ListChecks },
+  { key: 'conversations', label: 'Conversations', icon: MessageSquare },
   { key: 'eventTypes', label: 'Event types', icon: CalendarDays },
   { key: 'providers', label: 'Providers', icon: Users },
   { key: 'schedules', label: 'Availability', icon: Clock },
@@ -148,6 +158,7 @@ export function AdminApp({ tenantSlug }: { tenantSlug: string }) {
           </nav>
 
           {tab === 'bookings' && <BookingsTab />}
+          {tab === 'conversations' && <ConversationsTab />}
           {tab === 'eventTypes' && <EventTypesTab />}
           {tab === 'providers' && <ProvidersTab me={me} />}
           {tab === 'schedules' && <SchedulesTab />}

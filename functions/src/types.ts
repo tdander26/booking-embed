@@ -269,6 +269,27 @@ export interface Booking {
   source?: 'web' | 'embed';
 }
 
+// ---------- Website chat assistant transcripts ----------
+
+export interface ChatTranscriptMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** How far a website chat conversation got. Advances, never regresses. */
+export type ChatSessionStatus = 'open' | 'slots_shown' | 'booking_click';
+
+/** A saved website-chat conversation, keyed by the client session id. */
+export interface ChatSession {
+  id: string;
+  tenantId: string;
+  status: ChatSessionStatus;
+  messageCount: number;
+  messages: ChatTranscriptMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Existence reserves a slot. Doc id = sanitize(memberId)_cell (per-member). */
 export interface SlotLock {
   bookingId: string;
